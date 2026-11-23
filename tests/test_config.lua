@@ -1,0 +1,174 @@
+local MiniTest = require("mini.test")
+local h = dofile("tests/helpers.lua")
+local eq = MiniTest.expect.equality
+
+local capture
+
+local T = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      h.reset_modules()
+      capture = h.capture_notify()
+    end,
+    post_case = function()
+      capture.restore()
+    end,
+  },
+})
+
+local function config()
+  return require("duet.config")
+end
+
+T["get() before setup() returns the defaults"] = function()
+  eq(config().get(), config().defaults)
+end
+
+T["merge"] = MiniTest.new_set()
+
+local merge_cases = {
+  {
+    name = "nested table merges",
+    opts = { terminal = { layout = "float" }, review = { a = { b = 1 } } },
+    check = function(c)
+      eq(c.terminal, { layout = "float" })
+      eq(c.review, { a = { b = 1 } })
+      eq(c.agent, "claude")
+    end,
+  },
+  {
+    name = "scalar overrides",
+    opts = { agent = "other", log_level = "debug" },
+    check = function(c)
+      eq(c.agent, "other")
+      eq(c.log_level, "debug")
+    end,
+  },
+  {
+    name = "list replaces list",
+    setup_first = { agents = { x = { cmd = { "claude", "--a", "--b" } } } },
+    opts = { agents = { x = { cmd = { "x" } } } },
+    check = function(c)
+      eq(c.agents.x.cmd, { "x" })
+    end,
+  },
+  {
+    name = "setup() twice does not stack",
+    setup_first = { terminal = { a = 1 } },
+    opts = { terminal = { b = 2 } },
+    check = function(c)
+      eq(c.terminal, { b = 2 })
+    end,
+  },
+  {
+    name = "setup(nil) gives the defaults",
+    opts = nil,
+    check = function(c)
+      eq(c, require("duet.config").defaults)
+    end,
+  },
+  {
+    name = "setup({}) gives the defaults",
+    opts = {},
+    check = function(c)
+      eq(c, require("duet.config").defaults)
+    end,
+  },
+}
+
+for _, case in ipairs(merge_cases) do
+  T["merge"][case.name] = function()
+    if case.setup_first then
+      eq(config().setup(case.setup_first), true)
+    end
+    eq(config().setup(case.opts), true)
+    -- Merging is independent of unknown-key warnings, which are tested below.
+    case.check(config().get())
+  end
+end
+
+T["merge"]["does not alias user tables or mutate the defaults"] = function()
+  local opts = { agents = { x = { cmd = { "a" } } } }
+  config().setup(opts)
+  opts.agents.x.cmd[1] = "changed"
+  eq(config().get().agents.x.cmd, { "a" })
+  eq(config().defaults.agents, {})
+end
+
+T["validation error"] = MiniTest.new_set({
+  parametrize = {
+    { "table option given a string", { terminal = "x" }, "terminal: expected table, got string" },
+    { "unknown level name", { log_level = "loud" }, "^log_level: expected .* got loud$" },
+    { "out-of-range level number", { log_level = 42 }, "^log_level: expected .* got 42$" },
+    { "string option given a number", { agent = 1 }, "agent: expected string, got number" },
+    { "non-table opts", "str", "config: expected table, got string" },
+  },
+})
+
+T["validation error"]["%s"] = function(_, opts, pattern)
+  config().setup({ agent = "previous" })
+  local ok, err = config().setup(opts)
+  eq(ok, nil)
+  eq(err:match(pattern) ~= nil, true)
+  -- The previous config is kept.
+  eq(config().get().agent, "previous")
+  eq(#capture.messages, 1)
+  eq(capture.messages[1].level, vim.log.levels.ERROR)
+  eq(vim.startswith(capture.messages[1].msg, "[duet] invalid config: "), true)
+end
+
+T["unknown keys"] = MiniTest.new_set({
+  parametrize = {
+    { "top-level key", { foo = 1 }, "foo" },
+    { "nested key", { terminal = { bar = 1 } }, "terminal.bar" },
+    { "several keys in one warning", { foo = 1, bar = { baz = 1 } }, "bar, foo" },
+    { "key inside an open map", { agents = { anything = { cmd = { "x" } } } }, nil },
+    { "list values are not keys", { agents = { x = { args = { "a", "b" } } } }, nil },
+  },
+})
+
+T["unknown keys"]["%s"] = function(_, opts, expected)
+  eq(config().setup(opts), true)
+  if expected == nil then
+    eq(capture.messages, {})
+  else
+    eq(capture.messages, { { msg = "[duet] unknown option(s): " .. expected, level = vim.log.levels.WARN } })
+  end
+end
+
+T["schema"] = MiniTest.new_set()
+
+local test_schema = {
+  agents = { type = "table", open = true },
+  ["agents.*.cmd"] = { type = "table", optional = true },
+  terminal = { type = "table" },
+  ["terminal.layout"] = { type = "string" },
+}
+
+local schema_cases = {
+  { name = "wildcard validates per-entry fields", opts = { agents = { a = { cmd = "x" } } }, err = "agents.a.cmd" },
+  { name = "wildcard accepts a valid value", opts = { agents = { a = { cmd = { "x" } } } }, unknown = {} },
+  { name = "open map allows any key", opts = { agents = { a = { other = 1 } } }, unknown = {} },
+  { name = "known sub-key validates", opts = { terminal = { layout = 1 } }, err = "terminal.layout" },
+  { name = "unknown sub-key is reported", opts = { terminal = { size = 1 } }, unknown = { "terminal.size" } },
+}
+
+for _, case in ipairs(schema_cases) do
+  T["schema"][case.name] = function()
+    local ok, err, unknown = config().validate(case.opts, test_schema)
+    if case.err then
+      eq(ok, false)
+      eq(vim.startswith(err, case.err .. ":"), true)
+    else
+      eq({ ok, err, unknown }, { true, nil, case.unknown })
+    end
+  end
+end
+
+T["user_opts() records the last options"] = function()
+  eq(config().user_opts(), nil)
+  config().setup({ foo = 1 })
+  eq(config().user_opts(), { foo = 1 })
+end
+
+return T
