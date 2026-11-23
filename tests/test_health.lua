@@ -67,12 +67,18 @@ end
 
 T["agents"] = MiniTest.new_set()
 
----Write an executable script that prints `output` and exits with `code`.
-local function fake_bin(output, code)
+---Write an executable script and return its path.
+---@param lines string[] script body, after the shebang
+local function script(lines)
   local path = h.tmp_dir() .. "/fake-claude"
-  vim.fn.writefile({ "#!/bin/sh", ("echo '%s'"):format(output), ("exit %d"):format(code or 0) }, path)
+  vim.fn.writefile(vim.list_extend({ "#!/bin/sh" }, lines), path)
   vim.uv.fs_chmod(path, tonumber("755", 8))
   return path
+end
+
+---Write an executable script that prints `output` and exits with `code`.
+local function fake_bin(output, code)
+  return script({ ("echo '%s'"):format(output), ("exit %d"):format(code or 0) })
 end
 
 local function setup_child(opts)
@@ -95,8 +101,21 @@ T["agents"]["reports the binary and its version"] = function()
 end
 
 T["agents"]["warns when --version fails"] = function()
-  setup_child({ agents = { claude = { cmd = { fake_bin("boom", 3) } } } })
-  eq(has(checkhealth(), "WARNING claude --version exited with 3"), true)
+  local bin = fake_bin("boom", 3)
+  setup_child({ agents = { claude = { cmd = { bin } } } })
+  eq(has(checkhealth(), ("WARNING %s --version exited with 3"):format(bin)), true)
+end
+
+T["agents"]["runs the whole cmd for the version, without args"] = function()
+  -- A wrapper: it prints the version only when called as `<bin> wrapped --version`.
+  local bin = script({
+    'if [ "$1" = wrapped ] && [ "$2" = --version ] && [ "$#" -eq 2 ]; then',
+    "  echo '9.9.9 (Claude Code)'; exit 0",
+    "fi",
+    'echo "unexpected: $*" >&2; exit 1',
+  })
+  setup_child({ agents = { claude = { cmd = { bin, "wrapped" }, args = { "--model", "opus" } } } })
+  eq(has(checkhealth(), "OK claude version: 9.9.9 (Claude Code)"), true)
 end
 
 T["agents"]["reports an unknown default agent as an error"] = function()

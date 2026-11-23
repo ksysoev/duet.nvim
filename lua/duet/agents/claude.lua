@@ -140,16 +140,20 @@ function M:is_ready(lines)
   return false
 end
 
----Report the CLI version. Runs `<cmd> --version` with a short timeout.
+---Report the CLI version. Runs the whole `cmd` (so wrappers such as `npx …` or
+---`env FOO=1 claude` report the agent's version, not the wrapper's) plus `--version`,
+---with a short timeout. The user's `args` are left out: they don't affect the version.
 function M:health()
+  local argv = vim.list_extend(vim.deepcopy(self.cmd), { "--version" })
+  local label = shell_join(argv)
   local ok, result = pcall(function()
-    return vim.system({ self.cmd[1], "--version" }, { text = true }):wait(3000)
+    return vim.system(argv, { text = true }):wait(3000)
   end)
   if not ok then
-    vim.health.warn("claude --version failed: " .. tostring(result))
+    vim.health.warn(("%s failed: %s"):format(label, tostring(result)))
   elseif result.code ~= 0 then
     local detail = vim.trim(result.stderr or "")
-    vim.health.warn(("claude --version exited with %d%s"):format(result.code, detail ~= "" and (": " .. detail) or ""))
+    vim.health.warn(("%s exited with %d%s"):format(label, result.code, detail ~= "" and (": " .. detail) or ""))
   else
     vim.health.ok("claude version: " .. vim.trim(result.stdout or ""))
   end
