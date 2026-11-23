@@ -32,6 +32,34 @@ local function validate_level(v)
   return require("duet.log").parse_level(v) ~= nil
 end
 
+local function is_string_list(v)
+  if type(v) ~= "table" or not vim.islist(v) then
+    return false
+  end
+  for _, item in ipairs(v) do
+    if type(item) ~= "string" then
+      return false
+    end
+  end
+  return true
+end
+
+local function validate_cmd(v)
+  return is_string_list(v) and #v > 0
+end
+
+local function validate_string_map(v)
+  if type(v) ~= "table" then
+    return false
+  end
+  for key, value in pairs(v) do
+    if type(key) ~= "string" or type(value) ~= "string" then
+      return false
+    end
+  end
+  return true
+end
+
 ---Schema keyed by dotted path. A `*` segment matches any key, e.g. "agents.*.cmd".
 ---@type table<string, duet.config.SchemaEntry>
 M.schema = {
@@ -41,6 +69,10 @@ M.schema = {
   },
   agent = { type = "string" },
   agents = { type = "table", open = true },
+  ["agents.*"] = { type = "table" },
+  ["agents.*.cmd"] = { type = validate_cmd, desc = "non-empty list of strings" },
+  ["agents.*.args"] = { type = is_string_list, desc = "list of strings" },
+  ["agents.*.env"] = { type = validate_string_map, desc = "table of string to string" },
   terminal = { type = "table" },
   review = { type = "table" },
 }
