@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          cache: true
+      - run: mise run lint
+
+  test:
+    name: Test (${{ matrix.os }}, nvim ${{ matrix.nvim }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # v0.11.x is the minimum supported version (see AGENTS.md).
+        nvim: [stable, nightly, v0.11.7]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.nvim }}
+      - uses: jdx/mise-action@v5
+        with:
+          cache: true
+      - uses: actions/cache@v6
+        with:
+          path: .tests
+          key: tests-deps-${{ runner.os }}-${{ hashFiles('tests/minimal_init.lua') }}
+      - run: nvim --version
+      - run: mise run test
