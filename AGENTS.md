@@ -149,12 +149,16 @@ byte-compatible with revdiff (`format.parse` round-trips it), so check revdiff's
 - **Docs**: LuaLS annotations (`---@class`, `---@param`, `---@return`) on every public function and type. Each new
   command, option or tool goes into `doc/duet.txt` in the same PR.
 - **Config**: every new option gets a default in `config.lua`, validation, and a vimdoc entry.
-- **Formatting and lint**: StyLua (`stylua.toml`) and selene. Run `make fmt lint` before committing.
+- **Tooling**: [mise](https://mise.jdx.dev) (`mise.toml`) pins StyLua and selene and defines the tasks. Run
+  `mise trust && mise install` once.
+- **Formatting and lint**: StyLua (`stylua.toml`) and selene (`selene.toml` + `vim.yml`). Run `mise run fmt`, then
+  `mise run lint`, before committing. Test files `require("mini.test")` instead of using the `MiniTest` global.
 
 ## Testing
 
-- Use `mini.test`, bootstrapped by `tests/minimal_init.lua`. Run with `make test`. CI runs Neovim stable and nightly on
-  Linux and macOS.
+- Use `mini.test`, bootstrapped by `tests/minimal_init.lua`. Run with `mise run test` (uses `nvim` on `PATH`, or
+  `$DUET_NVIM_BIN`; never `$NVIM`, which holds the parent socket inside a Neovim terminal). CI runs Neovim stable,
+  nightly and the minimum supported 0.11 on Linux and macOS.
 - Use **table-driven tests** for pure logic (parsers, formatters, protocol, launch plans, `cursor_location`). Name each
   case.
 - Git-dependent tests create temporary repos with fixtures. Never touch the developer's real repo.
@@ -173,7 +177,8 @@ byte-compatible with revdiff (`format.parse` round-trips it), so check revdiff's
    **Verify them against current docs** rather than relying on memory, and link what you used in the PR:
    - Claude Code: https://docs.anthropic.com/en/docs/claude-code/cli-reference, `…/mcp`, `…/hooks`, `…/settings`
    - MCP: https://modelcontextprotocol.io/specification
-5. Before opening the PR: `make fmt lint test` passes, docs are updated, and the acceptance criteria are checked off.
+5. Before opening the PR: `mise run fmt` then `mise run check` pass, docs are updated, and the acceptance criteria are
+   checked off.
 6. Commits: imperative subject (`Add broker request lifecycle`), body explaining why. Reference the issue in the PR
    (`Closes #N`). No AI attribution trailers or "generated with" lines.
 

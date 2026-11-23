@@ -1,0 +1,34 @@
+# Dev tools and tasks for duet.nvim. Run `mise trust && mise install` once, then:
+#   mise run fmt     -- format with StyLua
+#   mise run check   -- lint + test (pre-PR gate)
+# Neovim itself is not pinned here: tests use the `nvim` on PATH, or $DUET_NVIM_BIN.
+# (Don't use $NVIM for this: inside a Neovim terminal it holds the parent's socket path.)
+
+[tools]
+stylua = "2.6.0"
+"aqua:Kampfkarren/selene" = "0.32.0"
+
+[tasks.deps]
+description = "Clone test dependencies (mini.nvim) into .tests/"
+run = "${DUET_NVIM_BIN:-nvim} --headless --noplugin -u tests/minimal_init.lua -c 'qa!'"
+
+[tasks.test]
+description = "Run the mini.test suite headless"
+depends = ["deps"]
+run = '${DUET_NVIM_BIN:-nvim} --headless --noplugin -u tests/minimal_init.lua -c "lua MiniTest.run()"'
+
+[tasks.lint]
+description = "Check formatting (StyLua) and lint (selene)"
+run = ["stylua --check .", "selene ."]
+
+[tasks.fmt]
+description = "Format all Lua with StyLua"
+run = "stylua ."
+
+[tasks.check]
+description = "Run lint and tests"
+depends = ["lint", "test"]
+
+[tasks.clean]
+description = "Remove downloaded test dependencies"
+run = "rm -rf .tests"
