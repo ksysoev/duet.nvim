@@ -170,7 +170,14 @@ local function check_agent(name, is_default)
   local label = is_default and (name .. " (default)") or name
   local bin = agent.cmd[1]
   if vim.fn.executable(bin) == 1 then
-    vim.health.ok(("%s: `%s` found on PATH"):format(label, bin))
+    -- Show the resolved file, so a wrong binary earlier on PATH is easy to spot.
+    vim.health.ok(("%s: `%s` → %s"):format(label, bin, vim.fn.exepath(bin)))
+  elseif bin:find("/", 1, true) then
+    vim.health.error(
+      ("%s: `%s` is not an executable file"):format(label, bin),
+      { ("Check `agents.%s.cmd`"):format(name) }
+    )
+    return
   else
     vim.health.error(
       ("%s: `%s` not found on PATH"):format(label, bin),

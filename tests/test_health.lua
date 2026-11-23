@@ -92,11 +92,20 @@ T["agents"]["reports a missing binary as an error"] = function()
   eq(has(report, "set `agents.claude.cmd` to the full path"), true)
 end
 
+T["agents"]["reports a full path that is not executable as an error"] = function()
+  local missing = h.tmp_dir() .. "/no-such-claude"
+  setup_child({ agents = { claude = { cmd = { missing } } } })
+  local report = checkhealth()
+  eq(has(report, ("ERROR claude (default): `%s` is not an executable file"):format(missing)), true)
+  eq(has(report, "Check `agents.claude.cmd`"), true)
+  eq(has(report, ("`%s` not found on PATH"):format(missing)), false)
+end
+
 T["agents"]["reports the binary and its version"] = function()
   local bin = fake_bin("9.9.9 (Claude Code)")
   setup_child({ agents = { claude = { cmd = { bin } } } })
   local report = checkhealth()
-  eq(has(report, ("OK claude (default): `%s` found on PATH"):format(bin)), true)
+  eq(has(report, ("OK claude (default): `%s` → %s"):format(bin, vim.fn.exepath(bin))), true)
   eq(has(report, "OK claude version: 9.9.9 (Claude Code)"), true)
 end
 
@@ -139,7 +148,8 @@ T["agents"]["lists features a registered agent lacks"] = function()
   ]])
   setup_child({ agent = "basic" })
   local report = checkhealth()
-  eq(has(report, "OK basic (default): `sh` found on PATH"), true)
+  -- A bare name shows the file it resolved to on PATH.
+  eq(has(report, ("OK basic (default): `sh` → %s"):format(vim.fn.exepath("sh"))), true)
   eq(has(report, "basic: not supported, so disabled: agent → editor tools (MCP), plan review"), true)
 end
 

@@ -129,7 +129,8 @@ Run `:checkhealth duet` to check:
 - your configuration (invalid values and unknown options),
 - the location of the log file,
 - for the default agent and every agent under |duet-config-agents|: that
-  its command is on your PATH, its version (for Claude Code, from
+  its command can be found (on your PATH, or at the path you set) and
+  which file it resolves to, its version (for Claude Code, from
   `claude --version`), and which duet features it does not support.
 
 ==============================================================================
