@@ -140,7 +140,15 @@ byte-compatible with revdiff (`format.parse` round-trips it), so check revdiff's
   `duet.log` to `stdpath("log")/duet.log`. Never `print` in the bridge: **stdout belongs to the MCP protocol**, so
   diagnostics go to stderr or the log.
 - **Don't block the editor.** Run git and other subprocesses through `vim.system` with callbacks. Schedule UI work
-  with `vim.schedule`. Sync wrappers are for tests only.
+  with `vim.schedule`. Sync wrappers are for tests only. The one exception is health checks, which may run short
+  synchronous subprocesses with a timeout (e.g. `claude --version`).
+- **Registries and lazy loading.** Nothing under `duet.*` loads at startup, so never rely on a module registering
+  itself when it loads. Built-in subcommands go in the built-in section at the bottom of `commands.lua`, and health
+  checks at the bottom of `health.lua`, each with a closure that `require`s the feature module when it runs. The same
+  rule applies to the broker's tools, prompts and hooks. `register()` stays public for runtime and third-party use.
+- **Subcommands**: `impl(args, opts)` gets the words after the subcommand name and the user-command options;
+  `opts.rest` is the raw text after the subcommand name, for free text such as `:Duet send`. Return `nil, err` to show
+  an error.
 - **Fail open toward the agent.** If duet breaks (parent gone, bad payload), a hook exits 0 with no output, and a tool
   returns an `isError` result instead of hanging.
 - **Naming**: module tables are `M`; classes are `PascalCase` with `Class.new`; private helpers are `local function`.
@@ -148,7 +156,12 @@ byte-compatible with revdiff (`format.parse` round-trips it), so check revdiff's
   are `duet://…`.
 - **Docs**: LuaLS annotations (`---@class`, `---@param`, `---@return`) on every public function and type. Each new
   command, option or tool goes into `doc/duet.txt` in the same PR.
-- **Config**: every new option gets a default in `config.lua`, validation, and a vimdoc entry.
+- **Config**: every new option gets an entry in `config.schema` (the source of truth for allowed keys), a default in
+  `config.defaults` when it has one, and a vimdoc entry. In the schema, mark maps keyed by the user with
+  `open = true`, use `*` for per-entry fields (`["agents.*.cmd"]`), and `optional = true` for options with no default.
+  Read options with `config.get()` at call time rather than caching them.
+- **Logging**: `log.lua` is shared with the bridge processes, so it must not depend on UI code or other duet modules
+  at load time. `$DUET_LOG_LEVEL` overrides `log_level`.
 - **Tooling**: [mise](https://mise.jdx.dev) (`mise.toml`) pins StyLua and selene and defines the tasks. Run
   `mise trust && mise install` once.
 - **Formatting and lint**: StyLua (`stylua.toml`) and selene (`selene.toml` + `vim.yml`). Run `mise run fmt`, then

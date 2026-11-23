@@ -4,6 +4,12 @@
 CONTENTS                                                       *duet-contents*
 
   1. Introduction ............................................ |duet-introduction|
+  2. Setup ................................................... |duet-setup|
+  3. Configuration ........................................... |duet-config|
+  4. Commands ................................................ |duet-commands|
+  5. Health .................................................. |duet-health|
+  6. Log file ................................................ |duet-log|
+  7. Lua API ................................................. |duet-api|
 
 ==============================================================================
 1. INTRODUCTION                                     *duet* *duet-introduction*
@@ -14,5 +20,122 @@ line annotations.
 
 This plugin is a work in progress. See the roadmap:
 https://github.com/ksysoev/duet.nvim/issues/1
+
+Requires Neovim >= 0.11. duet has no plugin dependencies.
+
+==============================================================================
+2. SETUP                                                          *duet-setup*
+
+Calling `setup()` is optional: without it, the defaults apply. Nothing is
+loaded at startup; modules load the first time you use duet.
+
+With lazy.nvim: >lua
+    { "ksysoev/duet.nvim", opts = {} }
+<
+Or directly: >lua
+    require("duet").setup({ log_level = "info" })
+<
+`setup()` can be called again; each call starts from the defaults, so options
+from an earlier call do not stick. If the options are invalid, an error is
+shown and the previous configuration stays in effect. Unknown options produce
+a single warning listing them.
+
+==============================================================================
+3. CONFIGURATION                                                 *duet-config*
+
+Defaults: >lua
+    {
+      log_level = "warn",
+      agent = "claude",
+      agents = {},
+      terminal = {},
+      review = {},
+    }
+<
+Tables merge deeply with the defaults. Lists (such as a command line) replace
+the default list instead of merging into it.
+
+                                                       *duet-config-log_level*
+log_level ~
+    `string|integer` (default: `"warn"`)
+    Minimum level written to the log file |duet-log|. One of `"trace"`,
+    `"debug"`, `"info"`, `"warn"`, `"error"`, `"off"`, or a |vim.log.levels|
+    number. Overridden by the `$DUET_LOG_LEVEL` environment variable.
+
+                                                           *duet-config-agent*
+agent ~
+    `string` (default: `"claude"`)
+    Name of the agent adapter used by default.
+
+                                                          *duet-config-agents*
+agents ~
+    `table<string, table>` (default: `{}`)
+    Per-agent overrides, keyed by agent name. Option keys inside this table
+    are not reported as unknown.
+
+                                                        *duet-config-terminal*
+terminal ~
+    `table` (default: `{}`)
+    Agent terminal options. Filled in by upcoming features.
+
+                                                          *duet-config-review*
+review ~
+    `table` (default: `{}`)
+    Review options. Filled in by upcoming features.
+
+==============================================================================
+4. COMMANDS                                               *duet-commands* *:Duet*
+
+:[range]Duet[!] {subcommand} [args]
+    Run a duet subcommand. The range and `!` are passed to the subcommand.
+    <Tab> completes subcommand names and, where supported, their arguments.
+
+:Duet
+    Without a subcommand, toggles the agent terminal once that feature is
+    available. Until then it shows the list of subcommands.
+
+==============================================================================
+5. HEALTH                                                        *duet-health*
+
+Run `:checkhealth duet` to check:
+- the Neovim version (>= 0.11 is required),
+- that `git` is on your PATH (needed for reviews),
+- your configuration (invalid values and unknown options),
+- the location of the log file.
+
+==============================================================================
+6. LOG FILE                                                         *duet-log*
+
+duet writes debug detail to `stdpath("log")/duet.log` (see |stdpath()|),
+filtered by |duet-config-log_level|. Set `$DUET_LOG_LEVEL` (for example
+`DUET_LOG_LEVEL=debug`) to override the level, including in the helper
+processes duet starts for the agent.
+
+==============================================================================
+7. LUA API                                                          *duet-api*
+
+require("duet").setup({opts})                                  *duet.setup()*
+    Configure duet. See |duet-setup|. Returns `true`, or `nil` and an error
+    message when the options are invalid.
+
+require("duet.config").get()                              *duet.config.get()*
+    Return the current configuration (treat it as read-only).
+
+require("duet.commands").register({name}, {spec})   *duet.commands.register()*
+    Add a `:Duet` subcommand. {spec} is a table with:
+    - `impl`     `fun(args: string[], opts: table)`: runs the subcommand.
+                 `opts` are the |nvim_create_user_command()| callback
+                 arguments plus `opts.rest`, the raw text after the
+                 subcommand name. May return `nil, err` to show an error.
+    - `complete` `fun(arglead: string, args: string[]): string[]`
+                 (optional): completes the argument being typed. `args` are
+                 the words typed before it, after the subcommand name.
+    - `desc`     `string` (optional): one-line description.
+    Registering an existing name replaces it.
+
+require("duet.health").register({name}, {fn})         *duet.health.register()*
+    Add a section to `:checkhealth duet`. {fn} reports with |vim.health|
+    functions. A check that throws is shown as an error without hiding the
+    others.
 
  vim:tw=78:ts=8:noet:ft=help:norl:
