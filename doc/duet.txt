@@ -10,6 +10,7 @@ CONTENTS                                                       *duet-contents*
   5. Health .................................................. |duet-health|
   6. Log file ................................................ |duet-log|
   7. Lua API ................................................. |duet-api|
+  8. Agents .................................................. |duet-agents|
 
 ==============================================================================
 1. INTRODUCTION                                     *duet* *duet-introduction*
@@ -70,8 +71,33 @@ agent ~
                                                           *duet-config-agents*
 agents ~
     `table<string, table>` (default: `{}`)
-    Per-agent overrides, keyed by agent name. Option keys inside this table
-    are not reported as unknown.
+    Per-agent overrides, keyed by agent name. Each entry may set:
+
+                                                     *duet-config-agents-cmd*
+    cmd ~
+        `string[]`: the command line, replacing the adapter's (for
+        Claude Code, `{ "claude" }`). Use it to point at a binary that is not
+        on your PATH, or to wrap the agent.
+                                                    *duet-config-agents-args*
+    args ~
+        `string[]`: extra arguments, added after `cmd` and before the
+        arguments duet adds.
+                                                     *duet-config-agents-env*
+    env ~
+        `table<string, string>`: extra environment variables for the agent.
+        They take precedence over variables duet sets.
+
+    Example: >lua
+        agents = {
+          claude = {
+            cmd = { "/opt/claude/bin/claude" },
+            args = { "--model", "opus" },
+            env = { DISABLE_AUTOUPDATER = "1" },
+          },
+        }
+<
+    Other keys inside an entry are not reported as unknown, so adapters can
+    read their own options.
 
                                                         *duet-config-terminal*
 terminal ~
@@ -101,7 +127,10 @@ Run `:checkhealth duet` to check:
 - the Neovim version (>= 0.11 is required),
 - that `git` is on your PATH (needed for reviews),
 - your configuration (invalid values and unknown options),
-- the location of the log file.
+- the location of the log file,
+- for the default agent and every agent under |duet-config-agents|: that
+  its command is on your PATH, its version (for Claude Code, from
+  `claude --version`), and which duet features it does not support.
 
 ==============================================================================
 6. LOG FILE                                                         *duet-log*
@@ -137,5 +166,70 @@ require("duet.health").register({name}, {fn})         *duet.health.register()*
     Add a section to `:checkhealth duet`. {fn} reports with |vim.health|
     functions. A check that throws is shown as an error without hiding the
     others.
+
+require("duet.agents").get({name})                       *duet.agents.get()*
+    Return the adapter {name} (default: |duet-config-agent|) with the
+    overrides from |duet-config-agents| applied, or `nil` and an error
+    message when there is no such adapter. Each call returns a new instance.
+
+require("duet.agents").list()                           *duet.agents.list()*
+    Return the names of all adapters, sorted.
+
+require("duet.agents").register({adapter})          *duet.agents.register()*
+    Add an adapter, or replace one with the same name. See
+    |duet-agents-adapter|.
+
+==============================================================================
+8. AGENTS                                                        *duet-agents*
+
+duet runs agents through adapters. An adapter knows the agent's command line
+and how to give it duet's MCP server, hooks and system prompt. The rest of
+duet only talks to adapters. Built-in adapters:
+
+  `claude`  Claude Code (https://code.claude.com). Supports the MCP server,
+            plan review and the system prompt.
+
+duet never changes an agent's own configuration files. For Claude Code, it
+writes a per-session `mcp.json` and `settings.json` and passes them with
+`--mcp-config` and `--settings`. Claude Code merges those with your own
+settings, so hooks you configured yourself (for example another
+`ExitPlanMode` hook) still run.
+
+Writing an adapter                                       *duet-agents-adapter*
+
+An adapter is a table: >lua
+    require("duet.agents").register({
+      name = "myagent",
+      cmd = { "myagent" },
+      capabilities = { mcp = true, plan_hook = false, system_prompt = false },
+      launch = function(self, spec)
+        local argv = vim.list_extend(vim.deepcopy(self.cmd), self.args)
+        return { argv = argv, env = self.env, files = {} }
+      end,
+    })
+<
+Fields:
+- `name`          `string`
+- `cmd`           `string[]`: the command line before any added arguments.
+- `capabilities`  `{ mcp, plan_hook, system_prompt }`, all `boolean`. duet
+                  turns off features whose capability is `false`.
+- `launch`        `fun(self, spec): plan`. Must be pure: no files written,
+                  no processes started. `self.cmd`, `self.args` and
+                  `self.env` already include the user's overrides.
+- `is_ready`      (optional) `fun(self, lines): boolean`: whether the
+                  agent's terminal (given as its lines) accepts input.
+- `format_ref`    (optional) `fun(self, path, range?): string`: how to
+                  refer to a file in a prompt.
+- `health`        (optional) `fun(self)`: extra |vim.health| reports, such
+                  as the version.
+
+`spec` (a `duet.LaunchSpec`) has `cwd`, `session_id`, `run_dir` (the
+per-session directory), and optionally `mcp` (`{ name, command, env }`),
+`hooks.plan_review` (`{ command, timeout_s? }`), `system_prompt` and
+`tool_timeout_ms`.
+
+The returned plan (a `duet.LaunchPlan`) has `argv`, `env`, and `files`, a
+list of `{ path, content }`. duet writes the files with mode 0600 before it
+starts the agent. Every path must be inside `spec.run_dir`.
 
  vim:tw=78:ts=8:noet:ft=help:norl:
