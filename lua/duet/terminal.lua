@@ -14,6 +14,7 @@ local M = {}
 ---@field buf integer terminal buffer
 ---@field job integer|nil job id while the agent runs
 ---@field exit_code integer|nil exit code once the job has exited
+---@field exit_seen boolean the terminal has been shown since the job exited
 ---@field last_used integer order of last use, higher is more recent
 ---@field stopping boolean the job is being stopped by duet, so its exit is expected
 local Session = {}
@@ -240,6 +241,11 @@ local function apply_window_options(win, layout)
   wo.signcolumn = "no"
   wo.foldcolumn = "0"
   wo.spell = false
+  wo.wrap = false
+  wo.list = false
+  wo.cursorline = false
+  wo.colorcolumn = ""
+  wo.statuscolumn = ""
   if layout == "bottom" then
     wo.winfixheight = true
   elseif layout ~= "float" then
@@ -329,6 +335,83 @@ local function release(self)
   remove_run_dir(self.run_dir)
 end
 
+-- Exit handling -------------------------------------------------------------
+
+local SIGNALS = {
+  [1] = "hangup (SIGHUP)",
+  [2] = "interrupted (SIGINT)",
+  [3] = "quit (SIGQUIT)",
+  [6] = "aborted (SIGABRT)",
+  [9] = "killed (SIGKILL)",
+  [13] = "broken pipe (SIGPIPE)",
+  [15] = "terminated (SIGTERM)",
+}
+
+---Lines of output shown with an error exit.
+local TAIL_LINES = 5
+---Longest line shown; TUI lines are as wide as the terminal.
+local TAIL_WIDTH = 200
+
+---Why a job exited with `code`, in words. Pure. Neovim reports a job killed by signal N
+---as 128 + N.
+---@param code integer non-zero exit code
+---@return string
+function M.exit_reason(code)
+  if code > 128 then
+    return SIGNALS[code - 128] or ("signal %d"):format(code - 128)
+  elseif code == 127 then
+    return "command not found"
+  elseif code == 126 then
+    return "command not executable"
+  end
+  return "see the terminal output"
+end
+
+---The last `n` non-blank lines of terminal output, trailing whitespace trimmed. Pure.
+---Neovim's "[Process exited N]" line is left out, and long lines are cut.
+---@param lines string[]
+---@param n integer
+---@return string[]
+function M.tail(lines, n)
+  local result = {}
+  for i = #lines, 1, -1 do
+    if #result == n then
+      break
+    end
+    local line = lines[i]:gsub("%s+$", "")
+    if line ~= "" and not line:match("^%[Process exited %-?%d+%]$") then
+      if vim.fn.strchars(line) > TAIL_WIDTH then
+        line = vim.fn.strcharpart(line, 0, TAIL_WIDTH - 1) .. "…"
+      end
+      table.insert(result, 1, line)
+    end
+  end
+  return result
+end
+
+---The error shown when an agent exits with a non-zero code. Pure.
+---@param name string agent name
+---@param code integer
+---@param lines string[] the terminal's last lines of output (see M.tail)
+---@param hidden boolean the terminal is kept but not shown, so say how to see it
+---@return string
+function M.exit_message(name, code, lines, hidden)
+  local parts = { ("%s exited with code %d: %s"):format(name, code, M.exit_reason(code)) }
+  vim.list_extend(parts, lines)
+  if hidden then
+    parts[#parts + 1] = "Run :Duet open to see the output."
+  end
+  return table.concat(parts, "\n")
+end
+
+---Whether `close_on_exit` closes the terminal after an exit with `code`.
+---@param code integer
+---@return boolean
+local function closes_on(code)
+  local policy = config().close_on_exit
+  return policy == "always" or (policy == "success" and code == 0)
+end
+
 ---@param self duet.Session
 ---@param code integer
 local function on_exit(self, code)
@@ -338,11 +421,27 @@ local function on_exit(self, code)
   if self.stopping then
     return
   end
-  local level = code == 0 and vim.log.levels.INFO or vim.log.levels.WARN
-  require("duet.util").notify(("%s exited with code %d"):format(self.agent.name, code), level)
-  require("duet.log").info("session %s (%s) exited with code %d", self.id, self.agent.name, code)
-  if config().close_on_exit and vim.api.nvim_buf_is_valid(self.buf) then
-    vim.api.nvim_buf_delete(self.buf, { force = true })
+  require("duet.log").debug("session %s (%s) exited with code %d", self.id, self.agent.name, code)
+  local valid = vim.api.nvim_buf_is_valid(self.buf)
+  local close = closes_on(code)
+  local shown = valid and #vim.fn.win_findbuf(self.buf) > 0
+  if code ~= 0 then
+    local lines = valid and M.tail(vim.api.nvim_buf_get_lines(self.buf, 0, -1, false), TAIL_LINES) or {}
+    local msg = M.exit_message(self.agent.name, code, lines, valid and not close and not shown)
+    require("duet.util").notify(msg, vim.log.levels.ERROR)
+  end
+  if not valid then
+    return
+  end
+  if close then
+    -- BufUnload releases the session.
+    pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
+    return
+  end
+  self.exit_seen = shown
+  -- In terminal mode, the next key would close the exited terminal and its output.
+  if vim.api.nvim_get_current_buf() == self.buf and vim.api.nvim_get_mode().mode == "t" then
+    vim.cmd.stopinsert()
   end
 end
 
@@ -494,6 +593,7 @@ function Session.new(agent, opts)
     run_dir = run_dir,
     buf = vim.api.nvim_create_buf(false, false),
     stopping = false,
+    exit_seen = false,
     last_used = next_use(),
   }, Session)
 
@@ -569,15 +669,17 @@ end
 function Session:show()
   self.last_used = next_use()
   local win = self:window()
-  if win then
-    return win
-  end
-  local err
-  win, err = open_window(self.buf, title(self.agent))
   if not win then
-    return nil, err
+    local err
+    win, err = open_window(self.buf, title(self.agent))
+    if not win then
+      return nil, err
+    end
+    hide_others(self)
   end
-  hide_others(self)
+  if not self.job then
+    self.exit_seen = true
+  end
   return win
 end
 
@@ -755,13 +857,14 @@ local function target(name)
 end
 
 ---Open and focus the agent's session for the current root, starting it if needed.
----A session whose agent has exited is restarted.
+---A session whose agent has exited is restarted, unless its terminal has not been seen
+---since the exit: then it is shown, so the agent's last output can be read.
 ---@param name? string agent name (default: the current session's agent, else the `agent` option)
 ---@return duet.Session|nil
 ---@return string|nil err
 function M.open(name)
   local session, err = target(name), nil
-  if session and not session:is_running() then
+  if session and not session:is_running() and session.exit_seen then
     session, err = session:restart()
   elseif not session then
     local agent

@@ -12,6 +12,8 @@ local function start()
   vim.env.XDG_RUNTIME_DIR = run_dir_env
   child.restart({ "-u", "tests/minimal_init.lua" })
   vim.env.XDG_RUNTIME_DIR = saved
+  -- Wide enough for the default 80-column panel next to a code window.
+  child.o.columns, child.o.lines = 200, 50
   child.lua([[
     _G.notes = {}
     vim.notify = function(msg, level)
@@ -73,7 +75,7 @@ local T = MiniTest.new_set({
 T["session"] = MiniTest.new_set()
 
 T["session"]["opens, hides and shows; the job survives hiding"] = function()
-  fake("fake", CAT)
+  fake("fake", CAT, {}, { terminal = { layout = "float" } })
   local info = child.lua([[
     local s = assert(T.open())
     local win = s:window()
@@ -185,7 +187,7 @@ T["session"]["writes the plan's files with mode 0600"] = function()
   eq(info.nested, true)
 end
 
-T["session"]["removes the run dir and notifies when the job exits"] = function()
+T["session"]["removes the run dir and keeps the terminal after an error exit"] = function()
   fake("fake", { "sh", "-c", "sleep 0.2; exit 3" }, { "mcp.json" })
   local info = child.lua([[
     local s = assert(T.open())
@@ -202,18 +204,128 @@ T["session"]["removes the run dir and notifies when the job exits"] = function()
   -- The buffer stays until the user closes it.
   eq(info.buf_valid, true)
   eq(info.listed, true)
-  eq(child.lua_get("_G.notes"), { { msg = "[duet] fake exited with code 3", level = vim.log.levels.WARN } })
+  eq(child.lua_get("_G.notes"), {
+    { msg = "[duet] fake exited with code 3: see the terminal output", level = vim.log.levels.ERROR },
+  })
 end
 
-T["session"]["wipes the buffer on exit with close_on_exit"] = function()
-  fake("fake", { "sh", "-c", "exit 0" }, {}, { terminal = { close_on_exit = true } })
+T["exit"] = MiniTest.new_set()
+
+T["exit"]["a clean exit closes the terminal quietly"] = function()
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 0" })
+  local info = child.lua([[
+    local code_win = vim.api.nvim_get_current_win()
+    local s = assert(T.open())
+    local win = s:window()
+    wait(function() return not vim.api.nvim_buf_is_valid(s.buf) end)
+    return {
+      buf_valid = vim.api.nvim_buf_is_valid(s.buf), win_valid = vim.api.nvim_win_is_valid(win),
+      listed = T.get(s.id) ~= nil, current = T.current() ~= nil,
+      back = vim.api.nvim_get_current_win() == code_win, id = s.id,
+    }
+  ]])
+  eq(info.buf_valid, false)
+  eq(info.win_valid, false)
+  eq({ info.listed, info.current }, { false, false })
+  eq(info.back, true)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("run_entries()"), {})
+  -- The next :Duet starts a new session.
+  child.cmd("Duet")
+  eq(child.lua_get("T.current() ~= nil and T.current().id ~= ...", { info.id }), true)
+end
+
+T["exit"]["an error exit keeps the window and reports the last output"] = function()
+  fake("fake", { "sh", "-c", "read _; echo one; echo; echo 'boom   '; exit 3" })
+  -- Separate calls: startinsert takes effect once the call returns.
+  child.lua("_G.s = assert(T.open()); _G.win = s:window()")
+  eq(child.api.nvim_get_mode().mode, "t")
+  child.type_keys("<CR>")
+  child.lua("wait(function() return s.exit_code ~= nil end)")
+  local info = child.lua_get("{ shown = s:window() == win, listed = T.get(s.id) ~= nil, running = s:is_running() }")
+  eq(info, { shown = true, listed = true, running = false })
+  -- Terminal mode is left, so the next key does not close the exited terminal.
+  eq(child.api.nvim_get_mode().mode, "nt")
+  child.type_keys("k")
+  eq(child.lua_get("vim.api.nvim_buf_is_valid(s.buf) and s:window() == win"), true)
+  eq(child.lua_get("_G.notes"), {
+    { msg = "[duet] fake exited with code 3: see the terminal output\none\nboom", level = vim.log.levels.ERROR },
+  })
+end
+
+T["exit"]["reports the reason"] = MiniTest.new_set({
+  parametrize = {
+    { "sh -c 'kill -INT $$'", { "sh", "-c", "sleep 0.2; kill -INT $$" }, "exited with code 130: interrupted (SIGINT)" },
+    {
+      "a missing command",
+      { "sh", "-c", "sleep 0.2; exec duet-no-such-command" },
+      "exited with code 127: command not found",
+    },
+  },
+})
+
+T["exit"]["reports the reason"]["%s"] = function(_, cmd, expected)
+  fake("fake", cmd)
+  child.lua("local s = assert(T.open()); wait(function() return s.exit_code ~= nil end)")
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(notes[1].level, child.lua_get("vim.log.levels.ERROR"))
+  eq(notes[1].msg:find(expected, 1, true) ~= nil, true)
+end
+
+T["exit"]["close_on_exit"] = MiniTest.new_set({
+  parametrize = {
+    { "never", 0, true, 0 },
+    { "never", 3, true, 1 },
+    { "always", 0, false, 0 },
+    { "always", 3, false, 1 },
+    { "success", 0, false, 0 },
+    { "success", 3, true, 1 },
+  },
+})
+
+T["exit"]["close_on_exit"]["%s, code %d"] = function(policy, code, kept, notes)
+  fake("fake", { "sh", "-c", "sleep 0.2; exit " .. code }, {}, { terminal = { close_on_exit = policy } })
   local info = child.lua([[
     local s = assert(T.open())
-    wait(function() return not vim.api.nvim_buf_is_valid(s.buf) end)
-    return { buf_valid = vim.api.nvim_buf_is_valid(s.buf), listed = T.get(s.id) ~= nil }
+    wait(function() return s.exit_code ~= nil end)
+    vim.wait(50)
+    return { buf = vim.api.nvim_buf_is_valid(s.buf), win = s:window() ~= nil }
   ]])
-  eq(info, { buf_valid = false, listed = false })
-  eq(child.lua_get("run_entries()"), {})
+  eq(info, { buf = kept, win = kept })
+  local got = child.lua_get("_G.notes")
+  eq(#got, notes)
+  -- The terminal is gone, so there is nothing to open.
+  if notes > 0 and not kept then
+    eq(got[1].msg:find(":Duet open", 1, true), nil)
+  end
+end
+
+T["exit"]["an error exit while hidden says how to see the output"] = function()
+  fake("fake", { "sh", "-c", "sleep 0.2; echo boom; exit 3" })
+  child.lua("local s = assert(T.open()); s:hide(); wait(function() return s.exit_code ~= nil end)")
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(vim.endswith(notes[1].msg, "boom\nRun :Duet open to see the output."), true)
+end
+
+T["exit"]["exits caused by duet are quiet"] = MiniTest.new_set({
+  parametrize = { { "stop" }, { "restart" }, { "stop_all" } },
+})
+
+T["exit"]["exits caused by duet are quiet"]["%s"] = function(action)
+  fake("fake", CAT)
+  child.lua(
+    [[
+    local s = assert(T.open())
+    local job = s.job
+    if ... == "stop" then s:stop() elseif ... == "restart" then assert(T.restart()) else T.stop_all() end
+    wait(function() return not running(job) end)
+    vim.wait(50)
+  ]],
+    { action }
+  )
+  eq(child.lua_get("_G.notes"), {})
 end
 
 T["session"]["rejects files outside the run dir"] = function()
@@ -299,7 +411,7 @@ T["session"]["opening an exited session restarts it"] = function()
   eq(child.lua_get("T.get(...) == nil", { old }), true)
 end
 
-T["session"]["reopening an agent that exited while hidden shows it"] = function()
+T["session"]["reopening an agent that exited while hidden shows it, then restarts it"] = function()
   fake("fake", CAT)
   local old = child.lua([[
     local s = T.open()
@@ -308,28 +420,59 @@ T["session"]["reopening an agent that exited while hidden shows it"] = function(
     wait(function() return s.exit_code ~= nil end)
     return s.id
   ]])
-  local new = child.lua([[
-    local s = assert(T.open())
-    return { id = s.id, visible = s:is_visible(), current = vim.api.nvim_get_current_win() == s:window() }
-  ]])
-  eq(new.id ~= old, true)
-  eq({ new.visible, new.current }, { true, true })
+  local function open()
+    return child.lua([[
+      local s = assert(T.open())
+      return {
+        id = s.id, running = s:is_running(), visible = s:is_visible(),
+        current = vim.api.nvim_get_current_win() == s:window(),
+      }
+    ]])
+  end
+  -- First the exited terminal, so its output can be read.
+  local first = open()
+  eq(first, { id = old, running = false, visible = true, current = true })
+  local second = open()
+  eq(second.id ~= old, true)
+  eq({ second.running, second.visible, second.current }, { true, true, true })
+  -- jobstop() sends SIGHUP, which duet did not cause.
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(notes[1].msg:find("exited with code 129: hangup (SIGHUP)", 1, true) ~= nil, true)
 end
 
-T["session"][":Duet shows an agent that exited while hidden"] = function()
+T["session"][":Duet shows an agent that exited while hidden, then restarts it"] = function()
   fake("fake", CAT)
-  child.lua([[
+  local old = child.lua([[
     local s = T.open()
     s:hide()
     vim.fn.jobstop(s.job)
     wait(function() return s.exit_code ~= nil end)
+    return s.id
   ]])
   child.cmd("Duet")
+  eq(child.lua_get("{ T.current().id, T.current():is_visible(), T.current():is_running() }"), { old, true, false })
+  child.cmd("Duet")
+  eq(child.lua_get("T.current():is_visible()"), false)
+  child.cmd("Duet")
+  eq(child.lua_get("T.current().id ~= ...", { old }), true)
   eq(child.lua_get("T.current():is_visible() and T.current():is_running()"), true)
 end
 
+T["session"]["opening an agent that exited while shown restarts it"] = function()
+  fake("fake", CAT, {}, { terminal = { close_on_exit = "never" } })
+  local old = child.lua([[
+    local s = T.open()
+    vim.fn.jobstop(s.job)
+    wait(function() return s.exit_code ~= nil end)
+    vim.cmd.wincmd("p")
+    return s.id
+  ]])
+  eq(child.lua_get("T.open().id ~= ...", { old }), true)
+end
+
 T["session"]["an invalid border fails cleanly"] = function()
-  fake("fake", CAT, { "mcp.json" }, { terminal = { float = { border = "thick" } } })
+  fake("fake", CAT, { "mcp.json" }, { terminal = { layout = "float", float = { border = "thick" } } })
   local before = child.lua("return { bufs = #vim.api.nvim_list_bufs(), wins = #vim.api.nvim_list_wins() }")
   local result = child.lua("return { T.open() }")
   eq(result[1], vim.NIL)
@@ -611,6 +754,90 @@ end
 
 T["layout"] = MiniTest.new_set()
 
+T["layout"]["the default is an 80-column panel on the right"] = function()
+  fake("fake", CAT)
+  local info = child.lua([[
+    local s = T.open()
+    local win = s:window()
+    local wo = vim.wo[win]
+    local pos = vim.api.nvim_win_get_position(win)
+    return {
+      relative = vim.api.nvim_win_get_config(win).relative,
+      width = vim.api.nvim_win_get_width(win),
+      right_edge = pos[2] + vim.api.nvim_win_get_width(win) == vim.o.columns,
+      full_height = vim.api.nvim_win_get_height(win) == vim.o.lines - vim.o.cmdheight - 1,
+      top = pos[1],
+      opts = {
+        winfixwidth = wo.winfixwidth, wrap = wo.wrap, list = wo.list, number = wo.number,
+        relativenumber = wo.relativenumber, signcolumn = wo.signcolumn, cursorline = wo.cursorline,
+        colorcolumn = wo.colorcolumn, statuscolumn = wo.statuscolumn,
+      },
+    }
+  ]])
+  eq(info.relative, "")
+  eq(info.width, 80)
+  eq({ info.right_edge, info.full_height, info.top }, { true, true, 0 })
+  eq(info.opts, {
+    winfixwidth = true,
+    wrap = false,
+    list = false,
+    number = false,
+    relativenumber = false,
+    signcolumn = "no",
+    cursorline = false,
+    colorcolumn = "",
+    statuscolumn = "",
+  })
+end
+
+T["layout"]["the panel is full height with other splits open"] = function()
+  fake("fake", CAT)
+  child.cmd("split | vsplit")
+  local info = child.lua([[
+    local win = T.open():window()
+    return {
+      height = vim.api.nvim_win_get_height(win), lines = vim.o.lines - vim.o.cmdheight - 1,
+      right_edge = vim.api.nvim_win_get_position(win)[2] + vim.api.nvim_win_get_width(win) == vim.o.columns,
+    }
+  ]])
+  eq(info.height, info.lines)
+  eq(info.right_edge, true)
+end
+
+T["layout"]["show() leaves the cursor, open() moves it"] = function()
+  fake("fake", CAT)
+  local info = child.lua([[
+    local code = vim.api.nvim_get_current_win()
+    local s = assert(T.open())
+    s:hide()
+    vim.api.nvim_set_current_win(code)
+    local win = assert(s:show())
+    local after_show = vim.api.nvim_get_current_win()
+    s:hide()
+    T.open()
+    return { show_kept = after_show == code, open_moved = vim.api.nvim_get_current_win() == s:window() }
+  ]])
+  eq(info, { show_kept = true, open_moved = true })
+end
+
+T["layout"]["window options stay with the terminal buffer"] = function()
+  fake("fake", CAT)
+  child.lua("vim.o.wrap = true; vim.o.list = true; vim.o.cursorline = true; vim.o.colorcolumn = '80'")
+  local info = child.lua([[
+    local win = T.open():window()
+    local other = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_win_set_buf(win, other)
+    local wo = vim.wo[win]
+    return { wrap = wo.wrap, list = wo.list, cursorline = wo.cursorline, colorcolumn = wo.colorcolumn }
+  ]])
+  eq(info, { wrap = true, list = true, cursorline = true, colorcolumn = "80" })
+end
+
+T["layout"]["a float is still available"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "float" } })
+  eq(child.lua_get("vim.api.nvim_win_get_config(T.open():window()).relative"), "editor")
+end
+
 T["layout"]["opens a split"] = function()
   fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 30 } } })
   local info = child.lua([[
@@ -671,10 +898,13 @@ T["layout"]["resizing the editor resizes fractional splits only"] = function()
 end
 
 T["layout"]["resizing keeps a float's own border"] = function()
-  fake("fake", CAT, {}, { terminal = { float = { width = 1, height = 1, border = "none" } } })
+  fake("fake", CAT, {}, { terminal = { layout = "float", float = { width = 1, height = 1, border = "none" } } })
   local cfg = child.lua([[
     local s = T.open()
-    require("duet").setup({ agent = "fake", terminal = { float = { width = 1, height = 1, border = "rounded" } } })
+    require("duet").setup({
+      agent = "fake",
+      terminal = { layout = "float", float = { width = 1, height = 1, border = "rounded" } },
+    })
     vim.cmd("doautocmd VimResized")
     local c = vim.api.nvim_win_get_config(s:window())
     return { width = c.width, col = c.col }
@@ -683,7 +913,7 @@ T["layout"]["resizing keeps a float's own border"] = function()
 end
 
 T["layout"]["a float stays below the tabline"] = function()
-  fake("fake", CAT, {}, { terminal = { float = { width = 1, height = 1, border = "none" } } })
+  fake("fake", CAT, {}, { terminal = { layout = "float", float = { width = 1, height = 1, border = "none" } } })
   child.o.showtabline = 2
   local row = child.lua("local s = T.open(); return vim.api.nvim_win_get_position(s:window())[1]")
   eq(row, 1)
@@ -820,6 +1050,75 @@ for _, case in ipairs(border_cases) do
   T["border_size()"][case.name] = function()
     h.reset_modules()
     eq({ require("duet.terminal").border_size(case.border) }, case.expected)
+  end
+end
+
+local reason_cases = {
+  { name = "generic error", code = 3, expected = "see the terminal output" },
+  { name = "not executable", code = 126, expected = "command not executable" },
+  { name = "command not found", code = 127, expected = "command not found" },
+  { name = "exit 128", code = 128, expected = "see the terminal output" },
+  { name = "SIGHUP", code = 129, expected = "hangup (SIGHUP)" },
+  { name = "SIGINT", code = 130, expected = "interrupted (SIGINT)" },
+  { name = "SIGKILL", code = 137, expected = "killed (SIGKILL)" },
+  { name = "SIGTERM", code = 143, expected = "terminated (SIGTERM)" },
+  { name = "unnamed signal", code = 138, expected = "signal 10" },
+}
+
+T["exit_reason()"] = MiniTest.new_set()
+for _, case in ipairs(reason_cases) do
+  T["exit_reason()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").exit_reason(case.code), case.expected)
+  end
+end
+
+local long = string.rep("x", 250)
+
+local tail_cases = {
+  { name = "empty", lines = {}, n = 5, expected = {} },
+  { name = "drops blank lines and trims", lines = { "a  ", "", "   ", "b\t", "", "" }, n = 5, expected = { "a", "b" } },
+  {
+    name = "keeps the last n",
+    lines = { "1", "2", "3", "4", "5", "6", "7" },
+    n = 5,
+    expected = { "3", "4", "5", "6", "7" },
+  },
+  { name = "drops the exit line", lines = { "boom", "", "[Process exited 3]", "" }, n = 5, expected = { "boom" } },
+  { name = "cuts long lines", lines = { long }, n = 5, expected = { string.rep("x", 199) .. "…" } },
+}
+
+T["tail()"] = MiniTest.new_set()
+for _, case in ipairs(tail_cases) do
+  T["tail()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").tail(case.lines, case.n), case.expected)
+  end
+end
+
+local message_cases = {
+  {
+    name = "no output",
+    args = { "claude", 3, {}, false },
+    expected = "claude exited with code 3: see the terminal output",
+  },
+  {
+    name = "with output",
+    args = { "claude", 137, { "a", "b" }, false },
+    expected = "claude exited with code 137: killed (SIGKILL)\na\nb",
+  },
+  {
+    name = "hidden",
+    args = { "claude", 1, { "boom" }, true },
+    expected = "claude exited with code 1: see the terminal output\nboom\nRun :Duet open to see the output.",
+  },
+}
+
+T["exit_message()"] = MiniTest.new_set()
+for _, case in ipairs(message_cases) do
+  T["exit_message()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").exit_message(unpack(case.args)), case.expected)
   end
 end
 
