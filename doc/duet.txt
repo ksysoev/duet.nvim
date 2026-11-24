@@ -126,7 +126,8 @@ terminal ~
         `{ width = 0.9, height = 0.9, border = "rounded" }`)
         Size and border of the float, which is centred in the editor.
         `border` takes the values of the `border` key of
-        |nvim_open_win()|.
+        |nvim_open_win()|: a name, or a list of 1, 2, 4 or 8 strings. An
+        unknown name is reported when the terminal opens.
                                                   *duet-config-terminal-split*
     split ~
         `{ width, height }` (default: `{ width = 0.4, height = 0.4 }`)
@@ -174,10 +175,11 @@ review ~
     it is not running for this project; an agent that has exited is
     restarted.
 
-:Duet close                                                     *:Duet-close*
-:Duet! close
+:Duet close [{agent}]                                           *:Duet-close*
+:Duet! close [{agent}]
     Hide the agent terminal; the agent keeps running. With `!`, stop the
-    agent and wipe its terminal buffer.
+    agent and wipe its terminal buffer. Without {agent}, acts on the shown
+    session, else the current one.
 
 :Duet restart [{agent}]                                       *:Duet-restart*
     Stop the agent and start it again, in the same window if it is shown.

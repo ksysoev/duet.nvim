@@ -299,6 +299,89 @@ T["session"]["opening an exited session restarts it"] = function()
   eq(child.lua_get("T.get(...) == nil", { old }), true)
 end
 
+T["session"]["reopening an agent that exited while hidden shows it"] = function()
+  fake("fake", CAT)
+  local old = child.lua([[
+    local s = T.open()
+    s:hide()
+    vim.fn.jobstop(s.job)
+    wait(function() return s.exit_code ~= nil end)
+    return s.id
+  ]])
+  local new = child.lua([[
+    local s = assert(T.open())
+    return { id = s.id, visible = s:is_visible(), current = vim.api.nvim_get_current_win() == s:window() }
+  ]])
+  eq(new.id ~= old, true)
+  eq({ new.visible, new.current }, { true, true })
+end
+
+T["session"][":Duet shows an agent that exited while hidden"] = function()
+  fake("fake", CAT)
+  child.lua([[
+    local s = T.open()
+    s:hide()
+    vim.fn.jobstop(s.job)
+    wait(function() return s.exit_code ~= nil end)
+  ]])
+  child.cmd("Duet")
+  eq(child.lua_get("T.current():is_visible() and T.current():is_running()"), true)
+end
+
+T["session"]["an invalid border fails cleanly"] = function()
+  fake("fake", CAT, { "mcp.json" }, { terminal = { float = { border = "thick" } } })
+  local before = child.lua("return { bufs = #vim.api.nvim_list_bufs(), wins = #vim.api.nvim_list_wins() }")
+  local result = child.lua("return { T.open() }")
+  eq(result[1], vim.NIL)
+  eq(result[2]:match("^terminal: cannot open window: .*border") ~= nil, true)
+  eq(child.lua_get("run_entries()"), {})
+  eq(child.lua_get("#T.list()"), 0)
+  eq(child.lua("return { bufs = #vim.api.nvim_list_bufs(), wins = #vim.api.nvim_list_wins() }"), before)
+  child.cmd("Duet open")
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(notes[1].level, vim.log.levels.ERROR)
+end
+
+T["session"]["a failed restart keeps the running session on screen"] = function()
+  fake("fake", CAT, { "mcp.json" })
+  local old = child.lua("local s = T.open(); return { id = s.id, win = s:window(), job = s.job }")
+  child.lua([[require("duet").setup({ agent = "fake", agents = { fake = { cmd = { "duet-no-such-binary" } } } })]])
+  local result = child.lua("return { T.restart() }")
+  eq(result[1], vim.NIL)
+  eq(result[2]:match("^terminal: cannot start fake") ~= nil, true)
+  eq(child.lua_get("T.get(...):window()", { old.id }), old.win)
+  eq(child.lua_get("running(...)", { old.job }), true)
+  eq(#child.lua_get("run_entries()"), 1)
+  eq(child.lua_get("#T.list()"), 1)
+end
+
+T["session"]["a failed start keeps the other session on screen"] = function()
+  fake("one", CAT)
+  fake("two", { "duet-no-such-binary" })
+  local one = child.lua_get("T.open('one').id")
+  local result = child.lua("return { T.open('two') }")
+  eq(result[1], vim.NIL)
+  eq(child.lua_get("T.get(...):is_visible()", { one }), true)
+end
+
+T["session"]["glob characters in argv leave other buffers alone"] = function()
+  fake("fake", { "sh", "-c", "cat # * ? [a] ~" })
+  local user = child.lua([[
+    local b = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(b, vim.fn.getcwd() .. "/notes.txt")
+    return b
+  ]])
+  child.lua("assert(T.open())")
+  eq(child.lua_get("vim.api.nvim_buf_is_valid(...)", { user }), true)
+  local leftovers = child.lua([[
+    return vim.tbl_filter(function(b)
+      return vim.startswith(vim.api.nvim_buf_get_name(b), "term://")
+    end, vim.api.nvim_list_bufs())
+  ]])
+  eq(leftovers, {})
+end
+
 T["session"]["showing one session hides the other"] = function()
   fake("one", CAT)
   fake("two", CAT)
@@ -346,6 +429,21 @@ T["session"]["wiping the buffer forgets the session"] = function()
   eq(child.lua("local job = ...; return wait(function() return not running(job) end)", { s.job }), true)
   eq(child.lua_get("run_entries()"), {})
   child.lua("vim.wait(100)")
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["session"]["deleting or unloading the buffer forgets the session quietly"] = MiniTest.new_set({
+  parametrize = { { "bdelete!" }, { "bunload!" }, { "bwipeout!" } },
+})
+
+T["session"]["deleting or unloading the buffer forgets the session quietly"]["%s"] = function(cmd)
+  fake("fake", CAT, { "mcp.json" })
+  local s = child.lua("local s = T.open(); return { id = s.id, buf = s.buf, job = s.job }")
+  child.cmd(cmd .. " " .. s.buf)
+  eq(child.lua("local job = ...; return wait(function() return not running(job) end)", { s.job }), true)
+  child.lua("vim.wait(100)")
+  eq(child.lua_get("T.get(...) == nil", { s.id }), true)
+  eq(child.lua_get("run_entries()"), {})
   eq(child.lua_get("_G.notes"), {})
 end
 
@@ -408,6 +506,20 @@ T["commands"][":Duet open, close and :Duet! close"] = function()
   child.cmd("Duet! close")
   eq(child.lua_get("#T.list()"), 0)
   eq(child.lua_get("run_entries()"), {})
+end
+
+T["commands"][":Duet! close {agent} stops that agent"] = function()
+  fake("one", CAT)
+  fake("two", CAT)
+  local one = child.lua_get("T.open('one').job")
+  local two = child.lua_get("T.open('two').job")
+  child.cmd("Duet! close one")
+  eq(child.lua_get("T.find('one', T.root()) == nil"), true)
+  eq(child.lua_get("running(...)", { two }), true)
+  eq(child.lua("local job = ...; return wait(function() return not running(job) end)", { one }), true)
+  child.cmd("Duet close nope")
+  eq(child.lua_get("_G.notes[#_G.notes].msg"), "[duet] terminal: no nope session for this project")
+  eq(child.fn.getcompletion("Duet close o", "cmdline"), { "one" })
 end
 
 T["commands"][":Duet restart"] = function()

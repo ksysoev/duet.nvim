@@ -180,6 +180,7 @@ M.register("close", {
   impl = function(args, opts)
     return require("duet.terminal").cmd_close(args, opts)
   end,
+  complete = complete_agent,
 })
 
 M.register("restart", {

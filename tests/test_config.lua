@@ -113,6 +113,11 @@ T["validation error"] = MiniTest.new_set({
     { "zero float width", { terminal = { float = { width = 0 } } }, "^terminal.float.width: expected" },
     { "split height as a string", { terminal = { split = { height = "1" } } }, "^terminal.split.height: expected" },
     { "border as a number", { terminal = { float = { border = 1 } } }, "^terminal.float.border: expected" },
+    {
+      "border list of 3",
+      { terminal = { float = { border = { "a", "b", "c" } } } },
+      "^terminal.float.border: expected",
+    },
     { "close_on_exit as a string", { terminal = { close_on_exit = "yes" } }, "^terminal.close_on_exit: expected" },
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
   },

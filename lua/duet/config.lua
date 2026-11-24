@@ -77,8 +77,13 @@ local function validate_size(v)
   return type(v) == "number" and v > 0
 end
 
+-- Border names differ between Neovim versions, so any string passes here; nvim_open_win
+-- reports an unknown name when the terminal opens. A list must have 1, 2, 4 or 8 parts.
 local function validate_border(v)
-  return type(v) == "string" or is_string_list(v)
+  if type(v) == "string" then
+    return true
+  end
+  return is_string_list(v) and vim.tbl_contains({ 1, 2, 4, 8 }, #v)
 end
 
 local function validate_key_action(v)
@@ -106,7 +111,7 @@ M.schema = {
   ["terminal.float"] = { type = "table" },
   ["terminal.float.width"] = { type = validate_size, desc = "positive number" },
   ["terminal.float.height"] = { type = validate_size, desc = "positive number" },
-  ["terminal.float.border"] = { type = validate_border, desc = "border name or list of strings" },
+  ["terminal.float.border"] = { type = validate_border, desc = "border name or list of 1, 2, 4 or 8 strings" },
   ["terminal.split"] = { type = "table" },
   ["terminal.split.width"] = { type = validate_size, desc = "positive number" },
   ["terminal.split.height"] = { type = validate_size, desc = "positive number" },

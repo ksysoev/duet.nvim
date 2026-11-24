@@ -191,14 +191,19 @@ local function is_float(win)
   return vim.api.nvim_win_get_config(win).relative ~= ""
 end
 
+---Open a window for `buf` with the configured layout. Focus does not move.
 ---@param buf integer
 ---@param title string
----@return integer win
+---@return integer|nil win
+---@return string|nil err e.g. an invalid border, or E11 in the command-line window
 local function open_window(buf, title)
   local opts = config()
   local columns, lines = editor_size()
   local cfg = M.win_config(opts.layout, opts, columns, lines, title)
-  local win = vim.api.nvim_open_win(buf, false, cfg)
+  local ok, win = pcall(vim.api.nvim_open_win, buf, false, cfg)
+  if not ok then
+    return nil, ("terminal: cannot open window: %s"):format(win)
+  end
   -- [0]: local to this window and its buffer, like :setlocal.
   local wo = vim.wo[win][0]
   wo.number = false
@@ -214,6 +219,12 @@ local function open_window(buf, title)
     end
   end
   return win
+end
+
+---@param agent duet.Agent
+---@return string
+local function title(agent)
+  return (" %s "):format(agent.name)
 end
 
 local function reposition_floats()
@@ -298,10 +309,12 @@ local function setup_buffer(self)
   local buf = self.buf
   local term_name = vim.api.nvim_buf_get_name(buf)
   vim.api.nvim_buf_set_name(buf, ("duet://%s/%s"):format(self.agent.name, self.id))
-  -- Renaming leaves an unlisted buffer with the old name behind; drop it.
-  local alt = vim.fn.bufnr(term_name)
-  if alt > 0 and alt ~= buf then
-    pcall(vim.api.nvim_buf_delete, alt, { force = true })
+  -- Renaming leaves an unlisted buffer with the old name behind; drop it. Compare names
+  -- exactly: bufnr() treats its argument as a pattern and could match another buffer.
+  for _, other in ipairs(vim.api.nvim_list_bufs()) do
+    if other ~= buf and vim.api.nvim_buf_get_name(other) == term_name then
+      pcall(vim.api.nvim_buf_delete, other, { force = true })
+    end
   end
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].buflisted = false
@@ -318,7 +331,9 @@ local function setup_buffer(self)
       end
     end,
   })
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  -- BufUnload comes first for :bdelete, :bunload and :bwipeout, so the session is
+  -- released before on_exit runs and the exit is not reported as unexpected.
+  vim.api.nvim_create_autocmd("BufUnload", {
     group = augroup,
     buffer = buf,
     desc = "duet: forget the session",
@@ -361,6 +376,26 @@ local function spawn(self, plan, win)
   end
   self.job = job
   return true
+end
+
+---Throw away a session that never started: its buffer and run dir.
+---@param self duet.Session
+local function discard(self)
+  self.stopping = true
+  remove_run_dir(self.run_dir)
+  if vim.api.nvim_buf_is_valid(self.buf) then
+    vim.api.nvim_buf_delete(self.buf, { force = true })
+  end
+end
+
+---Hide every other session in the current tab.
+---@param self duet.Session
+local function hide_others(self)
+  for _, other in pairs(sessions) do
+    if other ~= self then
+      other:hide()
+    end
+  end
 end
 
 ---@class duet.SessionOpts
@@ -407,24 +442,38 @@ function Session.new(agent, opts)
     last_used = next_use(),
   }, Session)
 
-  local win = opts.win
+  -- Start in a window when there is one, so the TUI gets its size from the start. Other
+  -- windows are left alone until the job runs, so a failed start changes nothing on screen.
+  local win, prev_buf, opened = opts.win, nil, false
   if win then
+    prev_buf = vim.api.nvim_win_get_buf(win)
     vim.api.nvim_win_set_buf(win, self.buf)
   elseif not opts.hidden then
-    win = self:show()
+    local open_err
+    win, open_err = open_window(self.buf, title(agent))
+    if not win then
+      discard(self)
+      return nil, open_err
+    end
+    opened = true
   end
+
   local started, err = spawn(self, plan, win)
   if not started then
-    self.stopping = true
-    remove_run_dir(run_dir)
-    if vim.api.nvim_buf_is_valid(self.buf) then
-      vim.api.nvim_buf_delete(self.buf, { force = true })
+    if opened then
+      pcall(vim.api.nvim_win_close, win, true)
+    elseif prev_buf and vim.api.nvim_win_is_valid(win) and vim.api.nvim_buf_is_valid(prev_buf) then
+      vim.api.nvim_win_set_buf(win, prev_buf)
     end
+    discard(self)
     return nil, err
   end
   require("duet.log").debug("session %s: started %s in %s", id, table.concat(plan.argv, " "), root)
   sessions[id] = self
   setup_buffer(self)
+  if win then
+    hide_others(self)
+  end
   return self
 end
 
@@ -456,25 +505,31 @@ function Session:is_visible()
 end
 
 ---Show the session in the current tab, hiding any other duet session there. Focus does not move.
----@return integer win
+---@return integer|nil win
+---@return string|nil err
 function Session:show()
   self.last_used = next_use()
   local win = self:window()
   if win then
     return win
   end
-  for _, other in pairs(sessions) do
-    if other ~= self then
-      other:hide()
-    end
+  local err
+  win, err = open_window(self.buf, title(self.agent))
+  if not win then
+    return nil, err
   end
-  return open_window(self.buf, (" %s "):format(self.agent.name))
+  hide_others(self)
+  return win
 end
 
 ---Show the session and move the cursor into it (in terminal mode with `auto_insert`).
----@return integer win
+---@return integer|nil win
+---@return string|nil err
 function Session:focus()
-  local win = self:show()
+  local win, err = self:show()
+  if not win then
+    return nil, err
+  end
   vim.api.nvim_set_current_win(win)
   if config().auto_insert and self.job then
     vim.cmd.startinsert()
@@ -517,12 +572,15 @@ function Session:hide()
 end
 
 ---Show the session if it is hidden in the current tab, hide it otherwise.
+---@return boolean|nil ok
+---@return string|nil err
 function Session:toggle()
   if self:is_visible() then
     self:hide()
-  else
-    self:focus()
+    return true
   end
+  local win, err = self:focus()
+  return win and true, err
 end
 
 ---Stop the agent and wipe its buffer. The run dir is removed.
@@ -533,8 +591,10 @@ function Session:stop()
   end
 end
 
----Stop the agent and start a new session for the same agent and root, in the same
----window if the session is shown. Reads the adapter and config again.
+---Start a new session for the same agent and root, then stop this one. The new session
+---takes over this one's window if it is shown, and starts hidden otherwise; focus does not
+---move. Reads the adapter and config again. If the new session fails to start, this one
+---is left as it was.
 ---@return duet.Session|nil session the new session
 ---@return string|nil err
 function Session:restart()
@@ -548,9 +608,6 @@ function Session:restart()
     return nil, new_err
   end
   self:stop()
-  if win then
-    new:focus()
-  end
   return new
 end
 
@@ -631,23 +688,23 @@ end
 ---@return duet.Session|nil
 ---@return string|nil err
 function M.open(name)
-  local session = target(name)
-  if session and session:is_running() then
-    session:focus()
-    return session
+  local session, err = target(name), nil
+  if session and not session:is_running() then
+    session, err = session:restart()
+  elseif not session then
+    local agent
+    agent, err = require("duet.agents").get(name)
+    if agent then
+      session, err = Session.new(agent)
+    end
   end
-  if session then
-    return session:restart()
-  end
-  local agent, err = require("duet.agents").get(name)
-  if not agent then
-    return nil, err
-  end
-  session, err = Session.new(agent)
   if not session then
     return nil, err
   end
-  session:focus()
+  local win, focus_err = session:focus()
+  if not win then
+    return nil, focus_err
+  end
   return session
 end
 
@@ -672,6 +729,9 @@ function M.close(opts)
   opts = opts or {}
   local session = target(opts.agent)
   if not session then
+    if opts.agent then
+      return nil, ("terminal: no %s session for this project"):format(opts.agent)
+    end
     return nil, "terminal: no agent session"
   end
   if opts.stop then
@@ -692,10 +752,14 @@ function M.restart(name)
     return M.open(name)
   end
   local new, err = session:restart()
-  if new and not new:is_visible() then
-    new:focus()
+  if not new then
+    return nil, err
   end
-  return new, err
+  local win, focus_err = new:focus()
+  if not win then
+    return nil, focus_err
+  end
+  return new
 end
 
 ---Stop every session and remove its run dir, synchronously. Runs on VimLeavePre.
@@ -707,7 +771,9 @@ end
 
 -- Command handlers ------------------------------------------------------------
 
+---Wrap an API function that takes an agent name as a :Duet subcommand handler.
 ---@param fn fun(name?: string): any, string?
+---@return fun(args: string[], opts?: duet.CommandOpts): boolean|nil, string|nil
 local function with_agent(fn)
   return function(args)
     local result, err = fn(args[1])
@@ -718,16 +784,25 @@ local function with_agent(fn)
   end
 end
 
+---`:Duet toggle [agent]`. Returns `true`, or `nil` and an error.
+---@type fun(args: string[], opts?: duet.CommandOpts): boolean|nil, string|nil
 M.cmd_toggle = with_agent(M.toggle)
+
+---`:Duet open [agent]`. Returns `true`, or `nil` and an error.
+---@type fun(args: string[], opts?: duet.CommandOpts): boolean|nil, string|nil
 M.cmd_open = with_agent(M.open)
+
+---`:Duet restart [agent]`. Returns `true`, or `nil` and an error.
+---@type fun(args: string[], opts?: duet.CommandOpts): boolean|nil, string|nil
 M.cmd_restart = with_agent(M.restart)
 
----@param _ string[]
+---`:Duet[!] close [agent]`: hide the session, or stop it with `!`.
+---@param args string[]
 ---@param opts duet.CommandOpts
 ---@return boolean|nil
 ---@return string|nil err
-function M.cmd_close(_, opts)
-  return M.close({ stop = opts.bang })
+function M.cmd_close(args, opts)
+  return M.close({ stop = opts.bang, agent = args[1] })
 end
 
 return M
