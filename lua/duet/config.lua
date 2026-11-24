@@ -16,7 +16,14 @@ M.defaults = {
   log_level = "warn",
   agent = "claude",
   agents = {},
-  terminal = {},
+  terminal = {
+    layout = "float",
+    float = { width = 0.9, height = 0.9, border = "rounded" },
+    split = { width = 0.4, height = 0.4 },
+    close_on_exit = false,
+    auto_insert = true,
+    keys = { ["<C-q>"] = "normal_mode" },
+  },
   review = {},
 }
 
@@ -60,6 +67,24 @@ local function validate_string_map(v)
   return true
 end
 
+local function one_of(values)
+  return function(v)
+    return vim.tbl_contains(values, v)
+  end
+end
+
+local function validate_size(v)
+  return type(v) == "number" and v > 0
+end
+
+local function validate_border(v)
+  return type(v) == "string" or is_string_list(v)
+end
+
+local function validate_key_action(v)
+  return v == false or (type(v) == "string" and vim.tbl_contains({ "normal_mode", "hide" }, v))
+end
+
 ---Schema keyed by dotted path. A `*` segment matches any key, e.g. "agents.*.cmd".
 ---@type table<string, duet.config.SchemaEntry>
 M.schema = {
@@ -74,6 +99,21 @@ M.schema = {
   ["agents.*.args"] = { type = is_string_list, desc = "list of strings" },
   ["agents.*.env"] = { type = validate_string_map, desc = "table of string to string" },
   terminal = { type = "table" },
+  ["terminal.layout"] = {
+    type = one_of({ "float", "right", "left", "bottom" }),
+    desc = '"float", "right", "left" or "bottom"',
+  },
+  ["terminal.float"] = { type = "table" },
+  ["terminal.float.width"] = { type = validate_size, desc = "positive number" },
+  ["terminal.float.height"] = { type = validate_size, desc = "positive number" },
+  ["terminal.float.border"] = { type = validate_border, desc = "border name or list of strings" },
+  ["terminal.split"] = { type = "table" },
+  ["terminal.split.width"] = { type = validate_size, desc = "positive number" },
+  ["terminal.split.height"] = { type = validate_size, desc = "positive number" },
+  ["terminal.close_on_exit"] = { type = "boolean" },
+  ["terminal.auto_insert"] = { type = "boolean" },
+  ["terminal.keys"] = { type = "table", open = true },
+  ["terminal.keys.*"] = { type = validate_key_action, desc = '"normal_mode", "hide" or false' },
   review = { type = "table" },
 }
 
