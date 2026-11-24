@@ -120,6 +120,11 @@ T["validation error"] = MiniTest.new_set({
     },
     { "close_on_exit as a string", { terminal = { close_on_exit = "yes" } }, "^terminal.close_on_exit: expected" },
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
+    {
+      "key action under a dotted lhs",
+      { terminal = { keys = { ["<M-.>"] = "hid" } } },
+      "^terminal.keys.<M%-.>: expected",
+    },
   },
 })
 
@@ -144,6 +149,7 @@ T["unknown keys"] = MiniTest.new_set({
     { "list values are not keys", { agents = { x = { args = { "a", "b" } } } }, nil },
     { "agent env keys are not options", { agents = { x = { env = { FOO = "1" }, args = {} } } }, nil },
     { "terminal keys are not options", { terminal = { keys = { ["<C-q>"] = false, ["<C-x>"] = "hide" } } }, nil },
+    { "dotted terminal keys are not options", { terminal = { keys = { ["<M-.>"] = "hide" } } }, nil },
   },
 })
 

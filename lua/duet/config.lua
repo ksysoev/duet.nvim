@@ -140,15 +140,17 @@ local function split(path)
   return vim.split(path, ".", { plain = true })
 end
 
----Find the schema entry for a dotted path, trying exact keys before wildcards.
+---Find the schema entry for an option path, trying exact keys before wildcards.
+---The path is a list of segments rather than a dotted string, because user keys (such as
+---the lhs in `terminal.keys`) may contain dots themselves.
 ---@param schema table<string, duet.config.SchemaEntry>
----@param path string
+---@param segments string[]
 ---@return duet.config.SchemaEntry|nil
-local function lookup(schema, path)
-  if schema[path] then
-    return schema[path]
+local function lookup(schema, segments)
+  local exact = schema[table.concat(segments, ".")]
+  if exact then
+    return exact
   end
-  local segments = split(path)
   for key, entry in pairs(schema) do
     local pattern = split(key)
     if #pattern == #segments then
@@ -192,8 +194,9 @@ function M.validate(opts, schema)
   local function walk(tbl, prefix, open)
     for _, key in ipairs(sorted_keys(tbl)) do
       local value = tbl[key]
-      local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
-      local entry = lookup(schema, path)
+      local segments = vim.list_extend(vim.deepcopy(prefix), { tostring(key) })
+      local path = table.concat(segments, ".")
+      local entry = lookup(schema, segments)
       if entry then
         local ok, msg = pcall(vim.validate, path, value, entry.type, entry.optional, entry.desc)
         if not ok then
@@ -203,11 +206,11 @@ function M.validate(opts, schema)
         unknown[#unknown + 1] = path
       end
       if is_dict(value) and (entry or open) then
-        walk(value, path, open or (entry ~= nil and entry.open == true))
+        walk(value, segments, open or (entry ~= nil and entry.open == true))
       end
     end
   end
-  walk(opts, "", false)
+  walk(opts, {}, false)
 
   if err then
     return false, err, unknown
