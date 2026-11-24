@@ -118,7 +118,8 @@ T["validation error"] = MiniTest.new_set({
       { terminal = { float = { border = { "a", "b", "c" } } } },
       "^terminal.float.border: expected",
     },
-    { "close_on_exit as a string", { terminal = { close_on_exit = "yes" } }, "^terminal.close_on_exit: expected" },
+    { "close_on_exit unknown", { terminal = { close_on_exit = "yes" } }, "^terminal.close_on_exit: expected" },
+    { "close_on_exit as a boolean", { terminal = { close_on_exit = true } }, "^terminal.close_on_exit: expected" },
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
     {
       "key action under a dotted lhs",

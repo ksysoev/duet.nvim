@@ -51,10 +51,10 @@ Defaults: >lua
       agent = "claude",
       agents = {},
       terminal = {
-        layout = "float",
+        layout = "right",
         float = { width = 0.9, height = 0.9, border = "rounded" },
-        split = { width = 0.4, height = 0.4 },
-        close_on_exit = false,
+        split = { width = 80, height = 0.4 },
+        close_on_exit = "success",
         auto_insert = true,
         keys = { ["<C-q>"] = "normal_mode" },
       },
@@ -117,9 +117,11 @@ terminal ~
 
                                                  *duet-config-terminal-layout*
     layout ~
-        `string` (default: `"float"`)
-        Where the terminal opens: `"float"`, `"right"`, `"left"` (full-height
-        vertical splits) or `"bottom"` (full-width horizontal split).
+        `string` (default: `"right"`)
+        Where the terminal opens: `"right"`, `"left"` (full-height vertical
+        splits at the edge of the editor, with 'winfixwidth'), `"bottom"`
+        (full-width horizontal split, with 'winfixheight') or `"float"`.
+        A side panel keeps the code you talk about in view.
                                                   *duet-config-terminal-float*
     float ~
         `{ width, height, border }` (default:
@@ -130,16 +132,22 @@ terminal ~
         unknown name is reported when the terminal opens.
                                                   *duet-config-terminal-split*
     split ~
-        `{ width, height }` (default: `{ width = 0.4, height = 0.4 }`)
+        `{ width, height }` (default: `{ width = 80, height = 0.4 }`)
         Width of the `"right"` and `"left"` splits, height of the `"bottom"`
         split. A fractional size is applied again when the editor is
         resized; an absolute size only when the split opens, so a split you
         resized by hand keeps its size.
                                           *duet-config-terminal-close_on_exit*
     close_on_exit ~
-        `boolean` (default: `false`)
-        Wipe the terminal buffer when the agent exits. Otherwise the buffer
-        stays, with the exit message, until you close it or reopen the agent.
+        `string` (default: `"success"`)
+        What happens to the terminal when the agent exits:
+        - `"success"`: close its window and wipe its buffer when the agent
+          exits with code 0. After any other code the terminal stays, so
+          you can read the agent's last output.
+        - `"always"`: close it whatever the exit code.
+        - `"never"`: keep it whatever the exit code.
+        A non-zero exit is reported as an error either way. See
+        |duet-terminal-exit|.
                                             *duet-config-terminal-auto_insert*
     auto_insert ~
         `boolean` (default: `true`)
@@ -174,8 +182,9 @@ review ~
 
 :Duet open [{agent}]                                             *:Duet-open*
     Show the agent terminal and move the cursor into it. Starts the agent if
-    it is not running for this project; an agent that has exited is
-    restarted.
+    it is not running for this project. An agent that has exited is
+    restarted, except that a terminal you have not seen since the agent
+    exited is shown first (see |duet-terminal-exit|).
 
 :Duet close [{agent}]                                           *:Duet-close*
 :Duet! close [{agent}]
@@ -325,9 +334,24 @@ config. It is removed when the agent exits, and every agent is stopped when
 Neovim exits. The agent's environment has `$NVIM` set to |v:servername|; if
 Neovim has no server yet (for example with `--headless`), duet starts one.
 
-When the agent exits, duet shows its exit code. The terminal buffer stays,
-unless |duet-config-terminal-close_on_exit| is set; opening the agent again
-starts a new session.
+                                                          *duet-terminal-exit*
+When the agent exits with code 0 (for example after CTRL-D), its terminal
+closes and the session ends; the next |:Duet| starts a new one. When it
+exits with another code, the terminal stays with the agent's last output and
+duet shows an error with the exit code, its reason and the last few lines of
+output. The reason names the signal for codes above 128 (e.g. `137` is
+"killed (SIGKILL)"), and code 127 means "command not found".
+|duet-config-terminal-close_on_exit| changes which exits close the terminal.
+
+In a terminal kept after the agent exited, `i`, `a`, `I` or `A` restarts the
+agent in the same window, and `q` closes the terminal and ends the session.
+A key you map to `"hide"` in |duet-config-terminal-keys| keeps that action,
+and the error message only names the keys that are left.
+
+If the agent exits while its terminal is hidden and the terminal is kept,
+|:Duet-open| (or |:Duet|) first shows it, so you can read the output; opening
+it again starts a new session. Exits caused by duet (|:Duet-close| with `!`,
+|:Duet-restart|, wiping the buffer, quitting Neovim) are not reported.
 
 Terminal buffers have the filetype `duet_terminal`, a name of the form
 `duet://<agent>/<id>`, and `b:duet_session` set to the session id. Only one
@@ -337,8 +361,9 @@ require("duet.terminal").current()                  *duet.terminal.current()*
     Return the session for the current context, or `nil`: the session of
     the current buffer, else the most recently used session for the current
     project. Never starts a session. A session has `id`, `agent`, `root`,
-    `buf`, `job` (`nil` once exited) and the methods `show()`, `hide()`,
-    `focus()`, `toggle()`, `restart()`, `stop()` and `is_visible()`.
+    `buf`, `job` (`nil` once exited), `exit_code` (set once exited) and the
+    methods `show()`, `hide()`, `focus()`, `toggle()`, `restart()`, `stop()`
+    and `is_visible()`.
 
 require("duet.terminal").get({id})                      *duet.terminal.get()*
     Return the session with id {id} (see `b:duet_session`), or `nil`.
