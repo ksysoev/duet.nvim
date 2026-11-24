@@ -280,7 +280,9 @@ local function relayout()
     for _, win in ipairs(vim.fn.win_findbuf(session.buf)) do
       if is_float(win) then
         -- Use the border the window has, which a later setup() may have changed in config.
-        local float = vim.tbl_extend("force", opts.float, { border = vim.api.nvim_win_get_config(win).border })
+        -- Neovim 0.11 leaves `border` out of the config of a window without one.
+        local border = vim.api.nvim_win_get_config(win).border or "none"
+        local float = vim.tbl_extend("force", opts.float, { border = border })
         local cfg = M.win_config("float", vim.tbl_extend("force", opts, { float = float }), editor)
         cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
         vim.api.nvim_win_set_config(win, cfg)

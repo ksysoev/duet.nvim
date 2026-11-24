@@ -381,18 +381,23 @@ end
 
 T["session"]["stop returns an error instead of throwing"] = function()
   fake("fake", CAT)
-  child.lua("T.open()")
-  child.type_keys([[<C-\><C-n>]])
-  child.cmd("wincmd p")
-  -- Deleting a buffer from the command-line window fails with E11.
-  child.type_keys("q:")
-  eq(child.fn.getcmdwintype(), ":")
-  local stop = child.lua("return { T.close({ stop = true }) }")
-  child.type_keys("<C-c><C-c>")
+  -- Deleting a buffer can fail (e.g. E11 from the command-line window on Neovim 0.12; the
+  -- exact cases vary by version), so make it fail on purpose.
+  local stop = child.lua([[
+    local s = T.open()
+    _G.job = s.job
+    local delete = vim.api.nvim_buf_delete
+    vim.api.nvim_buf_delete = function() error("E11: Invalid in command-line window") end
+    local result = { T.close({ stop = true }) }
+    vim.api.nvim_buf_delete = delete
+    vim.api.nvim_buf_delete(s.buf, { force = true })
+    return result
+  ]])
   eq(stop[1], vim.NIL)
   eq(stop[2]:match("^terminal: cannot close fake's buffer: .*E11") ~= nil, true)
   -- The agent is stopped anyway.
   eq(child.lua_get("#T.list()"), 0)
+  eq(child.lua_get("wait(function() return not running(_G.job) end)"), true)
 end
 
 T["session"][":qa quits with an agent running"] = function()
