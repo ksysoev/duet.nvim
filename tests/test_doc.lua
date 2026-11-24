@@ -15,7 +15,15 @@ T["helptags build without errors"] = function()
   local names = vim.tbl_map(function(line)
     return line:match("^([^\t]+)")
   end, tags)
-  for _, tag in ipairs({ "duet", ":Duet", "duet-config", "duet-health", "duet.setup()" }) do
+  for _, tag in ipairs({
+    "duet",
+    ":Duet",
+    "duet-config",
+    "duet-health",
+    "duet.setup()",
+    "duet-agents",
+    "duet.agents.get()",
+  }) do
     eq({ tag, vim.tbl_contains(names, tag) }, { tag, true })
   end
 end

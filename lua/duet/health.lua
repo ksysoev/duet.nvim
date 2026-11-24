@@ -77,5 +77,8 @@ end
 -- Built-in checks. Add feature checks here with a lazy require, e.g.:
 --   M.register("agents", function() require("duet.agents").health() end)
 M.register("duet", check_core)
+M.register("agents", function()
+  require("duet.agents").health()
+end)
 
 return M

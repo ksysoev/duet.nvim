@@ -105,10 +105,27 @@ These are the main interfaces. Change them only deliberately, and update #1 and 
 ---@field launch fun(self, spec: duet.LaunchSpec): duet.LaunchPlan   -- pure: argv, env, files to write
 ---@field is_ready? fun(self, lines: string[]): boolean
 ---@field format_ref? fun(self, path: string, range?: integer[]): string  -- e.g. "@path:L10-L20"
+---@field health? fun(self)                                            -- extra vim.health reports
+
+---@class duet.LaunchSpec              -- built by the core
+---@field cwd string
+---@field session_id string
+---@field run_dir string                -- stdpath("run")/duet/<session-id>; all plan files live here
+---@field mcp? { name: string, command: string[], env: table<string,string> }
+---@field hooks? { plan_review?: { command: string[], timeout_s?: integer } }
+---@field system_prompt? string
+---@field tool_timeout_ms? integer
+
+---@class duet.LaunchPlan              -- returned by the adapter
+---@field argv string[]
+---@field env table<string,string>
+---@field files { path: string, content: string }[]   -- written by the core (0600) before spawn
 ```
 
 The core branches on `capabilities`, never on `agent.name`. `if agent == "claude"` must not appear outside
-`agents/claude.lua`.
+`agents/claude.lua`. `agents.get(name)` returns a fresh instance with the user's `config.agents[name]` overrides
+(`cmd`, `args`, `env`) already applied, so adapters read `self.cmd`, `self.args` and `self.env` rather than their
+defaults. `launch` must stay pure: the core writes `files` and spawns the process.
 
 **Broker** (`lua/duet/broker.lua`): `register_tool{name, description, input_schema, handler(args, req)}`. Handlers
 resolve with `req:resolve(text)` or `req:reject(err)`, and react to `req:on_cancel(fn)`. The bridge calls

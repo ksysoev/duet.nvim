@@ -102,6 +102,11 @@ T["validation error"] = MiniTest.new_set({
     { "out-of-range level number", { log_level = 42 }, "^log_level: expected .* got 42$" },
     { "string option given a number", { agent = 1 }, "agent: expected string, got number" },
     { "non-table opts", "str", "config: expected table, got string" },
+    { "agent entry not a table", { agents = { claude = "x" } }, "^agents.claude: expected table" },
+    { "agent cmd as a string", { agents = { claude = { cmd = "claude" } } }, "^agents.claude.cmd: expected" },
+    { "agent cmd empty", { agents = { claude = { cmd = {} } } }, "^agents.claude.cmd: expected" },
+    { "agent args with a number", { agents = { claude = { args = { 1 } } } }, "^agents.claude.args: expected" },
+    { "agent env with a number", { agents = { claude = { env = { A = 1 } } } }, "^agents.claude.env: expected" },
   },
 })
 
@@ -124,6 +129,7 @@ T["unknown keys"] = MiniTest.new_set({
     { "several keys in one warning", { foo = 1, bar = { baz = 1 } }, "bar, foo" },
     { "key inside an open map", { agents = { anything = { cmd = { "x" } } } }, nil },
     { "list values are not keys", { agents = { x = { args = { "a", "b" } } } }, nil },
+    { "agent env keys are not options", { agents = { x = { env = { FOO = "1" }, args = {} } } }, nil },
   },
 })
 
