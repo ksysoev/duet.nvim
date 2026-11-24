@@ -335,6 +335,40 @@ local function release(self)
   remove_run_dir(self.run_dir)
 end
 
+---Whether `win` is the only non-floating window of its tab (it can't be closed then).
+---@param win integer
+---@return boolean
+local function is_last_window(win)
+  if is_float(win) then
+    return false
+  end
+  for _, other in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
+    if other ~= win and not is_float(other) then
+      return false
+    end
+  end
+  return true
+end
+
+---Take `buf` out of `win`: close the window, or, when it is the last window of its tab
+---and can't be closed, show the alternate buffer (or a new empty one) in it.
+---@param win integer
+---@param buf integer
+---@return boolean ok
+---@return any err
+local function close_window(win, buf)
+  if not is_last_window(win) then
+    return pcall(vim.api.nvim_win_close, win, false)
+  end
+  local alt = vim.api.nvim_win_call(win, function()
+    return vim.fn.bufnr("#")
+  end)
+  if alt <= 0 or alt == buf or not vim.bo[alt].buflisted then
+    alt = vim.api.nvim_create_buf(true, false)
+  end
+  return pcall(vim.api.nvim_win_set_buf, win, alt)
+end
+
 -- Exit handling -------------------------------------------------------------
 
 local SIGNALS = {
@@ -434,6 +468,15 @@ local function on_exit(self, code)
     return
   end
   if close then
+    -- Close the windows first: wiping a buffer only closes the current window if
+    -- autocommands let it (e.g. a snacks.nvim dashboard next to it does not), and
+    -- leaves an empty buffer in it otherwise.
+    for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
+      local ok, err = close_window(win, self.buf)
+      if not ok then
+        require("duet.log").warn("session %s: cannot close window %d: %s", self.id, win, err)
+      end
+    end
     -- BufUnload releases the session.
     pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
     return
@@ -698,21 +741,6 @@ function Session:focus()
   return win
 end
 
----Whether `win` is the only non-floating window of its tab (it can't be closed then).
----@param win integer
----@return boolean
-local function is_last_window(win)
-  if is_float(win) then
-    return false
-  end
-  for _, other in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
-    if other ~= win and not is_float(other) then
-      return false
-    end
-  end
-  return true
-end
-
 ---Hide the session's window in the current tab. The job keeps running.
 ---@return boolean|nil ok
 ---@return string|nil err e.g. E11 in the command-line window
@@ -721,18 +749,7 @@ function Session:hide()
   if not win then
     return true
   end
-  local ok, err
-  if is_last_window(win) then
-    local alt = vim.api.nvim_win_call(win, function()
-      return vim.fn.bufnr("#")
-    end)
-    if alt <= 0 or alt == self.buf or not vim.bo[alt].buflisted then
-      alt = vim.api.nvim_create_buf(true, false)
-    end
-    ok, err = pcall(vim.api.nvim_win_set_buf, win, alt)
-  else
-    ok, err = pcall(vim.api.nvim_win_close, win, false)
-  end
+  local ok, err = close_window(win, self.buf)
   if not ok then
     return nil, ("terminal: cannot hide %s: %s"):format(self.agent.name, err)
   end

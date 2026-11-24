@@ -235,6 +235,41 @@ T["exit"]["a clean exit closes the terminal quietly"] = function()
   eq(child.lua_get("T.current() ~= nil and T.current().id ~= ...", { info.id }), true)
 end
 
+T["exit"]["a clean exit closes the panel even when wiping would keep the window"] = function()
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 0" })
+  local info = child.lua([[
+    -- When autocommands stop the current window from closing (as a snacks.nvim dashboard
+    -- next to it does with a UI attached), :bwipeout puts an empty buffer in the window
+    -- and keeps it. Emulate that.
+    local delete = vim.api.nvim_buf_delete
+    vim.api.nvim_buf_delete = function(buf, opts)
+      for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+        vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+      end
+      return delete(buf, opts)
+    end
+    local s = assert(T.open())
+    local win = s:window()
+    wait(function() return not vim.api.nvim_buf_is_valid(s.buf) end)
+    vim.api.nvim_buf_delete = delete
+    return { win_valid = vim.api.nvim_win_is_valid(win), wins = #vim.api.nvim_tabpage_list_wins(0) }
+  ]])
+  eq(info, { win_valid = false, wins = 1 })
+end
+
+T["exit"]["a clean exit in the last window leaves a normal buffer there"] = function()
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 0" })
+  local info = child.lua([[
+    local s = assert(T.open())
+    vim.cmd("only")
+    local win = s:window()
+    wait(function() return not vim.api.nvim_buf_is_valid(s.buf) end)
+    local buf = vim.api.nvim_win_get_buf(win)
+    return { win_valid = vim.api.nvim_win_is_valid(win), buftype = vim.bo[buf].buftype, listed = T.get(s.id) ~= nil }
+  ]])
+  eq(info, { win_valid = true, buftype = "", listed = false })
+end
+
 T["exit"]["an error exit keeps the window and reports the last output"] = function()
   fake("fake", { "sh", "-c", "read _; echo one; echo; echo 'boom   '; exit 3" })
   -- Separate calls: startinsert takes effect once the call returns.
