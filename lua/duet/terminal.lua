@@ -399,12 +399,15 @@ local TAIL_LINES = 5
 ---Longest line shown; TUI lines are as wide as the terminal.
 local TAIL_WIDTH = 200
 
+---Highest signal number (Linux real-time signals go up to 64; macOS stops at 31).
+local MAX_SIGNAL = 64
+
 ---Why a job exited with `code`, in words. Pure. Neovim reports a job killed by signal N
----as 128 + N.
+---as 128 + N; larger codes (e.g. 255) are plain exit codes.
 ---@param code integer non-zero exit code
 ---@return string
 function M.exit_reason(code)
-  if code > 128 then
+  if code > 128 and code <= 128 + MAX_SIGNAL then
     return SIGNALS[code - 128] or ("signal %d"):format(code - 128)
   elseif code == 127 then
     return "command not found"
@@ -476,20 +479,39 @@ local function restart_exited(self)
   end
 end
 
+---Keys the user maps in `terminal.keys`, normalized with vim.keycode().
+---@return table<string, true>
+local function user_keys()
+  local keys = {}
+  for lhs, action in pairs(config().keys) do
+    if action then
+      keys[vim.keycode(lhs)] = true
+    end
+  end
+  return keys
+end
+
 ---Keep an exited terminal useful: `i`, `a`, `I` and `A` restart the agent in the same
----window, and `q` closes the terminal and ends the session. Terminal-mode entered any other
----way (from Insert mode in another window, a mouse click, a plugin) is left again at once:
----Neovim would delete the terminal on the next key and leave an empty buffer in the window.
+---window, and `q` closes the terminal and ends the session; keys the user maps in
+---`terminal.keys` keep their action. Terminal-mode entered any other way (from Insert mode
+---in another window, a mouse click, a plugin) is left again at once: Neovim would delete
+---the terminal on the next key and leave an empty buffer in the window.
 ---@param self duet.Session
 local function keep_exited(self)
-  for _, lhs in ipairs({ "i", "a", "I", "A" }) do
-    vim.keymap.set("n", lhs, function()
-      restart_exited(self)
-    end, { buffer = self.buf, desc = "duet: restart the exited agent" })
+  local taken = user_keys()
+  local function map(lhs, fn, desc)
+    if not taken[vim.keycode(lhs)] then
+      vim.keymap.set("n", lhs, fn, { buffer = self.buf, desc = desc })
+    end
   end
-  vim.keymap.set("n", "q", function()
+  for _, lhs in ipairs({ "i", "a", "I", "A" }) do
+    map(lhs, function()
+      restart_exited(self)
+    end, "duet: restart the exited agent")
+  end
+  map("q", function()
     self:stop()
-  end, { buffer = self.buf, desc = "duet: close the exited agent terminal" })
+  end, "duet: close the exited agent terminal")
   vim.api.nvim_create_autocmd("TermEnter", {
     group = augroup,
     buffer = self.buf,
@@ -498,6 +520,31 @@ local function keep_exited(self)
       vim.cmd.stopinsert()
     end,
   })
+end
+
+---Close an exited session's terminal: its windows, then its buffer. BufUnload releases
+---the session.
+---@param self duet.Session
+---@return boolean ok false if the buffer could not be wiped (e.g. E11)
+local function close_exited(self)
+  close_windows(self)
+  local ok, err = pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
+  if not ok then
+    require("duet.log").warn("session %s: cannot close the terminal: %s", self.id, err)
+  end
+  return ok
+end
+
+---Keep an exited session's terminal, with its output.
+---@param self duet.Session
+local function keep_terminal(self)
+  -- Only the current tab counts: a terminal left open in another tab has not been seen.
+  self.exit_seen = self:is_visible()
+  keep_exited(self)
+  -- In terminal mode, the next key would close the exited terminal and its output.
+  if vim.api.nvim_get_current_buf() == self.buf and vim.api.nvim_get_mode().mode == "t" then
+    vim.cmd.stopinsert()
+  end
 end
 
 ---@param self duet.Session
@@ -512,7 +559,7 @@ local function on_exit(self, code)
   require("duet.log").debug("session %s (%s) exited with code %d", self.id, self.agent.name, code)
   local valid = vim.api.nvim_buf_is_valid(self.buf)
   local close = closes_on(code)
-  local shown = valid and #vim.fn.win_findbuf(self.buf) > 0
+  local shown = valid and self:is_visible()
   if code ~= 0 then
     local lines = valid and M.tail(vim.api.nvim_buf_get_lines(self.buf, 0, -1, false), TAIL_LINES) or {}
     local hint = (valid and not close) and (shown and HINT_SHOWN or HINT_HIDDEN) or nil
@@ -523,17 +570,27 @@ local function on_exit(self, code)
     return
   end
   if close then
-    close_windows(self)
-    -- BufUnload releases the session.
-    pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
-    return
+    if vim.fn.getcmdwintype() ~= "" then
+      -- Windows can't be closed from the command-line window (E11): close once it is left.
+      vim.api.nvim_create_autocmd("CmdwinLeave", {
+        group = augroup,
+        once = true,
+        desc = "duet: close the exited agent terminal",
+        callback = function()
+          vim.schedule(function()
+            if vim.api.nvim_buf_is_valid(self.buf) and not close_exited(self) then
+              keep_terminal(self)
+            end
+          end)
+        end,
+      })
+      return
+    end
+    if close_exited(self) then
+      return
+    end
   end
-  self.exit_seen = shown
-  keep_exited(self)
-  -- In terminal mode, the next key would close the exited terminal and its output.
-  if vim.api.nvim_get_current_buf() == self.buf and vim.api.nvim_get_mode().mode == "t" then
-    vim.cmd.stopinsert()
-  end
+  keep_terminal(self)
 end
 
 ---@param self duet.Session

@@ -352,6 +352,84 @@ T["exit"]["entering terminal mode another way keeps the exited terminal"] = func
   )
 end
 
+T["exit"]["a terminal shown only in another tab is not seen"] = function()
+  fake("fake", { "sh", "-c", "read _; echo crash-output; exit 1" })
+  local info = child.lua([[
+    vim.cmd("tabnew")
+    _G.s = assert(T.open())
+    vim.cmd("stopinsert")
+    vim.cmd("tabprevious")
+    vim.fn.chansend(s.job, "\n")
+    wait(function() return s.exit_code ~= nil end)
+    local first = assert(T.open())
+    return { first_same = first == s, buf = vim.api.nvim_buf_is_valid(s.buf) }
+  ]])
+  eq({ info.first_same, info.buf }, { true, true })
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(
+    vim.endswith(notes[1].msg, "Run :Duet open to see the output, then press i to restart the agent or q to close it."),
+    true
+  )
+  -- Seen now, so opening again restarts.
+  eq(child.lua_get("T.open() ~= s"), true)
+end
+
+T["exit"]["a clean exit in the command-line window closes the terminal once it is left"] = function()
+  fake("fake", { "sh", "-c", "read _; exit 0" })
+  child.lua([[
+    _G.s = assert(T.open())
+    vim.cmd("stopinsert")
+    vim.cmd("wincmd p")
+  ]])
+  child.type_keys("q:")
+  eq(child.fn.getcmdwintype(), ":")
+  child.lua("vim.fn.chansend(s.job, '\\n'); wait(function() return s.exit_code ~= nil end); vim.wait(50)")
+  eq(child.lua_get("vim.api.nvim_buf_is_valid(s.buf)"), true)
+  child.type_keys("<C-c>")
+  child.lua("wait(function() return not vim.api.nvim_buf_is_valid(s.buf) end)")
+  eq(
+    child.lua_get(
+      "{ buf = vim.api.nvim_buf_is_valid(s.buf), listed = T.get(s.id) ~= nil, cmdwin = vim.fn.getcmdwintype() }"
+    ),
+    {
+      buf = false,
+      listed = false,
+      cmdwin = "",
+    }
+  )
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["exit"]["keys from terminal.keys keep their action"] = MiniTest.new_set({
+  parametrize = {
+    { "q = hide", { q = "hide" }, "q", "hide" },
+    { "q = false", { q = false }, "q", "close" },
+    { "i = hide", { i = "hide" }, "i", "hide" },
+    { "a = hide, i restarts", { a = "hide" }, "i", "restart" },
+  },
+})
+
+T["exit"]["keys from terminal.keys keep their action"]["%s"] = function(_, keys, key, expected)
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 3" }, {}, { terminal = { keys = keys } })
+  child.lua([[
+    _G.s = assert(T.open())
+    wait(function() return s.exit_code ~= nil end)
+  ]])
+  child.type_keys(key)
+  child.lua("vim.wait(100)")
+  local info = child.lua_get([[{
+    visible = s:is_visible(), listed = T.get(s.id) ~= nil,
+    restarted = T.current() ~= nil and T.current() ~= s and T.current():is_running(),
+  }]])
+  local want = ({
+    hide = { visible = false, listed = true, restarted = false },
+    close = { visible = false, listed = false, restarted = false },
+    restart = { visible = false, listed = false, restarted = true },
+  })[expected]
+  eq(info, want)
+end
+
 T["exit"]["stopping closes the panel even when wiping would keep the window"] = function()
   fake("fake", CAT)
   local info = child.lua([[
@@ -1188,6 +1266,9 @@ local reason_cases = {
   { name = "SIGKILL", code = 137, expected = "killed (SIGKILL)" },
   { name = "SIGTERM", code = 143, expected = "terminated (SIGTERM)" },
   { name = "unnamed signal", code = 138, expected = "signal 10" },
+  { name = "highest signal", code = 192, expected = "signal 64" },
+  { name = "above signals", code = 193, expected = "see the terminal output" },
+  { name = "exit 255", code = 255, expected = "see the terminal output" },
 }
 
 T["exit_reason()"] = MiniTest.new_set()

@@ -345,6 +345,7 @@ output. The reason names the signal for codes above 128 (e.g. `137` is
 
 In a terminal kept after the agent exited, `i`, `a`, `I` or `A` restarts the
 agent in the same window, and `q` closes the terminal and ends the session.
+Keys you map in |duet-config-terminal-keys| keep their action.
 
 If the agent exits while its terminal is hidden and the terminal is kept,
 |:Duet-open| (or |:Duet|) first shows it, so you can read the output; opening
