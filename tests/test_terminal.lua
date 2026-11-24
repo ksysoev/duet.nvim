@@ -386,6 +386,52 @@ T["exit"]["a terminal shown only in another tab is not seen"] = function()
   eq(child.lua_get("T.open() ~= s"), true)
 end
 
+T["exit"]["entering the terminal in another tab counts as seeing it"] = function()
+  fake("fake", { "sh", "-c", "read _; echo out; exit 1" })
+  child.lua([[
+    vim.cmd("tabnew")
+    _G.s = assert(T.open())
+    vim.cmd("stopinsert")
+    vim.cmd("tabprevious")
+    vim.fn.chansend(s.job, "\n")
+    wait(function() return s.exit_code ~= nil end)
+    vim.cmd("tabnext")
+    vim.api.nvim_set_current_win(s:window())
+  ]])
+  eq(child.lua_get("T.open() ~= s and T.current():is_running()"), true)
+end
+
+T["exit"]["the hint names only the keys duet mapped"] = MiniTest.new_set({
+  parametrize = {
+    { "defaults", {}, "In the terminal, press i to restart the agent or q to close it." },
+    { "q = hide", { q = "hide" }, "In the terminal, press i to restart the agent." },
+    { "i = hide", { i = "hide" }, "In the terminal, press a to restart the agent or q to close it." },
+  },
+})
+
+T["exit"]["the hint names only the keys duet mapped"]["%s"] = function(_, keys, hint)
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 3" }, {}, { terminal = { keys = keys } })
+  child.lua("local s = assert(T.open()); wait(function() return s.exit_code ~= nil end)")
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(vim.split(notes[1].msg, "\n")[2], hint)
+end
+
+T["exit"]["closing the last window does not pile up empty buffers"] = function()
+  fake("fake", CAT)
+  local counts = child.lua([[
+    local function listed() return #vim.fn.getbufinfo({ buflisted = 1 }) end
+    local before = listed()
+    for _ = 1, 3 do
+      local s = assert(T.open())
+      vim.cmd("only")
+      assert(s:stop())
+    end
+    return { before = before, after = listed() }
+  ]])
+  eq(counts.after, counts.before)
+end
+
 T["exit"]["a clean exit in the command-line window closes the terminal once it is left"] = function()
   fake("fake", { "sh", "-c", "read _; exit 0" })
   child.lua([[
@@ -418,6 +464,7 @@ T["exit"]["keys from terminal.keys keep their action"] = MiniTest.new_set({
     { "q = false", { q = false }, "q", "close" },
     { "i = hide", { i = "hide" }, "i", "hide" },
     { "a = hide, i restarts", { a = "hide" }, "i", "restart" },
+    { "q = normal_mode, q still closes", { q = "normal_mode" }, "q", "close" },
   },
 })
 
@@ -1330,6 +1377,38 @@ local message_cases = {
     expected = "claude exited with code 1: see the terminal output\nboom\nPress i.",
   },
 }
+
+local hint_cases = {
+  {
+    name = "both keys, shown",
+    keys = { restart = "i", close = "q" },
+    hidden = false,
+    expected = "In the terminal, press i to restart the agent or q to close it.",
+  },
+  {
+    name = "both keys, hidden",
+    keys = { restart = "i", close = "q" },
+    hidden = true,
+    expected = "Run :Duet open to see the output, then press i to restart the agent or q to close it.",
+  },
+  {
+    name = "restart only",
+    keys = { restart = "a" },
+    hidden = false,
+    expected = "In the terminal, press a to restart the agent.",
+  },
+  { name = "close only", keys = { close = "q" }, hidden = false, expected = "In the terminal, press q to close it." },
+  { name = "no keys, shown", keys = {}, hidden = false, expected = nil },
+  { name = "no keys, hidden", keys = {}, hidden = true, expected = "Run :Duet open to see the output." },
+}
+
+T["exit_hint()"] = MiniTest.new_set()
+for _, case in ipairs(hint_cases) do
+  T["exit_hint()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").exit_hint(case.keys, case.hidden), case.expected)
+  end
+end
 
 T["exit_message()"] = MiniTest.new_set()
 for _, case in ipairs(message_cases) do
