@@ -199,6 +199,7 @@ local function open_window(buf, title)
   local columns, lines = editor_size()
   local cfg = M.win_config(opts.layout, opts, columns, lines, title)
   local win = vim.api.nvim_open_win(buf, false, cfg)
+  -- [0]: local to this window and its buffer, like :setlocal.
   local wo = vim.wo[win][0]
   wo.number = false
   wo.relativenumber = false
@@ -699,7 +700,7 @@ end
 
 ---Stop every session and remove its run dir, synchronously. Runs on VimLeavePre.
 function M.stop_all()
-  for _, session in pairs(sessions) do
+  for _, session in ipairs(M.list()) do
     release(session)
   end
 end

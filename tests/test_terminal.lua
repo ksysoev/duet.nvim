@@ -317,6 +317,27 @@ T["session"]["stop_all stops jobs and removes run dirs on VimLeavePre"] = functi
   eq(child.lua_get("#T.list()"), 0)
 end
 
+T["session"]["stop_all stops every session"] = function()
+  fake("one", CAT, { "mcp.json" })
+  fake("two", CAT, { "mcp.json" })
+  fake("three", CAT, { "mcp.json" })
+  local jobs = child.lua("return { T.open('one').job, T.open('two').job, T.open('three').job }")
+  eq(#child.lua_get("run_entries()"), 3)
+  child.cmd("doautocmd VimLeavePre")
+  eq(
+    child.lua(
+      [[local jobs = ...
+      return wait(function()
+        return not (running(jobs[1]) or running(jobs[2]) or running(jobs[3]))
+      end)]],
+      { jobs }
+    ),
+    true
+  )
+  eq(child.lua_get("run_entries()"), {})
+  eq(child.lua_get("#T.list()"), 0)
+end
+
 T["session"]["wiping the buffer forgets the session"] = function()
   fake("fake", CAT, { "mcp.json" })
   local s = child.lua("local s = T.open(); return { id = s.id, buf = s.buf, job = s.job }")
