@@ -365,6 +365,63 @@ T["session"]["a failed start keeps the other session on screen"] = function()
   eq(child.lua_get("T.get(...):is_visible()", { one }), true)
 end
 
+T["session"]["a failed start in a lent window keeps that window"] = function()
+  fake("fake", { "duet-no-such-binary" })
+  local info = child.lua([[
+    vim.cmd("vsplit")
+    local win = vim.api.nvim_get_current_win()
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.bo[scratch].bufhidden = "wipe"
+    vim.api.nvim_win_set_buf(win, scratch)
+    local s, err = T.Session.new(require("duet.agents").get("fake"), { win = win })
+    return { s = s == nil, err = err ~= nil, valid = vim.api.nvim_win_is_valid(win) }
+  ]])
+  eq(info, { s = true, err = true, valid = true })
+end
+
+T["session"]["stop returns an error instead of throwing"] = function()
+  fake("fake", CAT)
+  child.lua("T.open()")
+  child.type_keys([[<C-\><C-n>]])
+  child.cmd("wincmd p")
+  -- Deleting a buffer from the command-line window fails with E11.
+  child.type_keys("q:")
+  eq(child.fn.getcmdwintype(), ":")
+  local stop = child.lua("return { T.close({ stop = true }) }")
+  child.type_keys("<C-c><C-c>")
+  eq(stop[1], vim.NIL)
+  eq(stop[2]:match("^terminal: cannot close fake's buffer: .*E11") ~= nil, true)
+  -- The agent is stopped anyway.
+  eq(child.lua_get("#T.list()"), 0)
+end
+
+T["session"][":qa quits with an agent running"] = function()
+  -- E947 would refuse :qa while a terminal job runs; check that it doesn't, and that
+  -- VimLeavePre cleans up, on every Neovim version CI runs.
+  local run = h.tmp_dir()
+  local marker = vim.fs.joinpath(h.tmp_dir(), "not-quit")
+  local script = vim.fs.joinpath(h.tmp_dir(), "script.lua")
+  vim.fn.writefile({
+    "vim.opt.rtp:prepend(vim.fn.getcwd())",
+    "require('duet.agents').register({ name = 'fake', cmd = { 'sh', '-c', 'cat' },",
+    "  capabilities = { mcp = false, plan_hook = false, system_prompt = false },",
+    "  launch = function(self, spec)",
+    "    return { argv = self.cmd, env = {}, files = { { path = spec.run_dir .. '/f', content = 'x' } } }",
+    "  end })",
+    "local s = assert(require('duet.terminal').open('fake'))",
+    "assert(vim.uv.fs_stat(s.run_dir .. '/f'))",
+    "s:hide()",
+    "vim.cmd('qa')",
+    "vim.fn.writefile({}, " .. vim.inspect(marker) .. ")",
+  }, script)
+  local saved = vim.env.XDG_RUNTIME_DIR
+  vim.env.XDG_RUNTIME_DIR = run
+  local result = vim.system({ vim.v.progpath, "--headless", "--clean", "-l", script }, { text = true }):wait(10000)
+  vim.env.XDG_RUNTIME_DIR = saved
+  eq({ result.code, vim.uv.fs_stat(marker) == nil }, { 0, true })
+  eq(vim.fn.glob(vim.fs.joinpath(run, "**", "duet", "*"), true, true), {})
+end
+
 T["session"]["glob characters in argv leave other buffers alone"] = function()
   fake("fake", { "sh", "-c", "cat # * ? [a] ~" })
   local user = child.lua([[
@@ -567,6 +624,66 @@ T["layout"]["opens a split"] = function()
   eq({ info.fix, info.number }, { true, false })
 end
 
+T["layout"]["restart keeps the terminal's window options"] = MiniTest.new_set({
+  parametrize = { { "right" }, { "float" } },
+})
+
+T["layout"]["restart keeps the terminal's window options"]["%s"] = function(layout)
+  fake("fake", CAT, {}, { terminal = { layout = layout } })
+  -- Neovim's own TermOpen autocmd turns off number and signcolumn for new terminals, but
+  -- not spell, and users can remove that autocmd.
+  child.lua("vim.o.number = true; vim.o.signcolumn = 'yes'; vim.o.spell = true")
+  local info = child.lua([[
+    local s = T.open()
+    local win = s:window()
+    local new = assert(T.restart())
+    return {
+      same = new:window() == win,
+      number = vim.wo[win].number, signcolumn = vim.wo[win].signcolumn, spell = vim.wo[win].spell,
+      fix = vim.wo[win].winfixwidth,
+    }
+  ]])
+  eq(info.same, true)
+  eq({ info.number, info.signcolumn, info.spell }, { false, "no", false })
+  eq(info.fix, layout == "right")
+end
+
+T["layout"]["resizing the editor resizes fractional splits only"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 0.5 } } })
+  local widths = child.lua([[
+    local s = T.open()
+    local win = s:window()
+    vim.o.columns = 120
+    vim.cmd("doautocmd VimResized")
+    local fraction = vim.api.nvim_win_get_width(win)
+    require("duet").setup({ agent = "fake", terminal = { layout = "right", split = { width = 30 } } })
+    vim.api.nvim_win_set_width(win, 40)
+    vim.o.columns = 100
+    vim.cmd("doautocmd VimResized")
+    return { fraction, vim.api.nvim_win_get_width(win) }
+  ]])
+  eq(widths, { 60, 40 })
+end
+
+T["layout"]["resizing keeps a float's own border"] = function()
+  fake("fake", CAT, {}, { terminal = { float = { width = 1, height = 1, border = "none" } } })
+  local cfg = child.lua([[
+    local s = T.open()
+    require("duet").setup({ agent = "fake", terminal = { float = { width = 1, height = 1, border = "rounded" } } })
+    vim.cmd("doautocmd VimResized")
+    local c = vim.api.nvim_win_get_config(s:window())
+    return { width = c.width, col = c.col }
+  ]])
+  eq(cfg, { width = child.o.columns, col = 0 })
+end
+
+T["layout"]["a float stays below the tabline"] = function()
+  fake("fake", CAT, {}, { terminal = { float = { width = 1, height = 1, border = "none" } } })
+  child.o.showtabline = 2
+  local row = child.lua("local s = T.open(); return vim.api.nvim_win_get_position(s:window())[1]")
+  eq(row, 1)
+end
+
 T["layout"]["hides a split that is the last window"] = function()
   fake("fake", CAT, {}, { terminal = { layout = "bottom" } })
   local info = child.lua([[
@@ -623,6 +740,33 @@ local geometry_cases = {
     },
   },
   {
+    name = "float with a shadow pads right and bottom only, no title",
+    layout = "float",
+    opts = { float = { width = 1, height = 1, border = "shadow" }, split = OPTS.split },
+    expected = { relative = "editor", style = "minimal", border = "shadow", width = 99, height = 39, row = 0, col = 0 },
+  },
+  {
+    name = "float with a list border without top and bottom edges",
+    layout = "float",
+    opts = { float = { width = 1, height = 1, border = { "", "", "", "|", "", "", "", "|" } }, split = OPTS.split },
+    expected = {
+      relative = "editor",
+      style = "minimal",
+      border = { "", "", "", "|", "", "", "", "|" },
+      width = 98,
+      height = 40,
+      row = 0,
+      col = 0,
+    },
+  },
+  {
+    name = "float below the tabline",
+    layout = "float",
+    opts = { float = { width = 1, height = 1, border = "none" }, split = OPTS.split },
+    editor = { top = 1 },
+    expected = { relative = "editor", style = "minimal", border = "none", width = 100, height = 40, row = 1, col = 0 },
+  },
+  {
     name = "right split, fraction",
     layout = "right",
     opts = OPTS,
@@ -641,7 +785,8 @@ T["win_config()"] = MiniTest.new_set()
 for _, case in ipairs(geometry_cases) do
   T["win_config()"][case.name] = function()
     h.reset_modules()
-    eq(require("duet.terminal").win_config(case.layout, case.opts, 100, 40, " t "), case.expected)
+    local editor = vim.tbl_extend("force", { columns = 100, lines = 40 }, case.editor or {})
+    eq(require("duet.terminal").win_config(case.layout, case.opts, editor, " t "), case.expected)
   end
 end
 
@@ -652,6 +797,26 @@ local size_cases = {
   { name = "absolute clamped", value = 300, total = 80, expected = 80 },
   { name = "tiny fraction is at least 1", value = 0.001, total = 80, expected = 1 },
 }
+
+local border_cases = {
+  { name = "none", border = "none", expected = { 0, 0, 0, 0 } },
+  { name = "nil", border = nil, expected = { 0, 0, 0, 0 } },
+  { name = "named", border = "rounded", expected = { 1, 1, 1, 1 } },
+  { name = "shadow", border = "shadow", expected = { 0, 1, 1, 0 } },
+  { name = "one part repeats", border = { "x" }, expected = { 1, 1, 1, 1 } },
+  { name = "two parts: edges are the second", border = { "+", "" }, expected = { 0, 0, 0, 0 } },
+  { name = "four parts", border = { "", "-", "", "|" }, expected = { 1, 1, 1, 1 } },
+  { name = "eight parts, left edge only", border = { "", "", "", "", "", "", "", "|" }, expected = { 0, 0, 0, 1 } },
+  { name = "part with a highlight", border = { { "", "X" }, { "-", "X" } }, expected = { 1, 1, 1, 1 } },
+}
+
+T["border_size()"] = MiniTest.new_set()
+for _, case in ipairs(border_cases) do
+  T["border_size()"][case.name] = function()
+    h.reset_modules()
+    eq({ require("duet.terminal").border_size(case.border) }, case.expected)
+  end
+end
 
 T["resolve_size()"] = MiniTest.new_set()
 for _, case in ipairs(size_cases) do

@@ -150,29 +150,60 @@ function M.resolve_size(value, total)
   return math.max(1, math.min(size, total))
 end
 
+---Cells a border takes on each side. Pure. A list repeats to 8 parts (corners and edges,
+---clockwise from the top-left), as in |nvim_open_win()|; an empty edge takes no space.
+---@param border? string|(string|string[])[]
+---@return integer top
+---@return integer right
+---@return integer bottom
+---@return integer left
+function M.border_size(border)
+  if border == nil or border == "" or border == "none" then
+    return 0, 0, 0, 0
+  elseif border == "shadow" then
+    return 0, 1, 1, 0
+  elseif type(border) == "string" then
+    return 1, 1, 1, 1
+  end
+  local function edge(i)
+    local part = border[(i - 1) % #border + 1]
+    if type(part) == "table" then
+      part = part[1]
+    end
+    return (part ~= nil and part ~= "") and 1 or 0
+  end
+  return edge(2), edge(4), edge(6), edge(8)
+end
+
+---@class duet.EditorSize
+---@field columns integer editor width
+---@field lines integer rows available for windows
+---@field top? integer rows taken above them (the tabline)
+
 ---Window config for a layout. Pure: depends only on its arguments.
 ---@param layout "float"|"right"|"left"|"bottom"
 ---@param opts table the `terminal` config
----@param columns integer editor width
----@param lines integer editor height available for windows
----@param title? string float title
+---@param editor duet.EditorSize
+---@param title? string float title, shown when the border has a top edge
 ---@return vim.api.keyset.win_config
-function M.win_config(layout, opts, columns, lines, title)
+function M.win_config(layout, opts, editor, title)
+  local columns, lines = editor.columns, editor.lines
   if layout == "float" then
     local border = opts.float.border
-    local pad = border == "none" and 0 or 2
-    local width = M.resolve_size(opts.float.width, math.max(1, columns - pad))
-    local height = M.resolve_size(opts.float.height, math.max(1, lines - pad))
+    local top, right, bottom, left = M.border_size(border)
+    local pad_w, pad_h = left + right, top + bottom
+    local width = M.resolve_size(opts.float.width, math.max(1, columns - pad_w))
+    local height = M.resolve_size(opts.float.height, math.max(1, lines - pad_h))
     local cfg = {
       relative = "editor",
       style = "minimal",
       border = border,
       width = width,
       height = height,
-      row = math.max(0, math.floor((lines - height - pad) / 2)),
-      col = math.max(0, math.floor((columns - width - pad) / 2)),
+      row = (editor.top or 0) + math.max(0, math.floor((lines - height - pad_h) / 2)),
+      col = math.max(0, math.floor((columns - width - pad_w) / 2)),
     }
-    if title and pad > 0 then
+    if title and top > 0 then
       cfg.title = title
       cfg.title_pos = "center"
     end
@@ -183,12 +214,38 @@ function M.win_config(layout, opts, columns, lines, title)
   return { split = layout, win = -1, width = M.resolve_size(opts.split.width, columns) }
 end
 
+---The editor area windows can use: the tabline, the command line and a status line are
+---left out.
+---@return duet.EditorSize
 local function editor_size()
-  return vim.o.columns, vim.o.lines - vim.o.cmdheight - 1
+  local tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local top = tabline and 1 or 0
+  local status = vim.o.laststatus == 0 and 0 or 1
+  return { columns = vim.o.columns, lines = math.max(1, vim.o.lines - vim.o.cmdheight - status - top), top = top }
 end
 
 local function is_float(win)
   return vim.api.nvim_win_get_config(win).relative ~= ""
+end
+
+---Set the terminal's window options. They are local to the window's current buffer
+---(`vim.wo[win][0]`, like :setlocal), so call this again after putting a new buffer in
+---the window. `w:duet_layout` records the layout for resizing.
+---@param win integer
+---@param layout "float"|"right"|"left"|"bottom"
+local function apply_window_options(win, layout)
+  local wo = vim.wo[win][0]
+  wo.number = false
+  wo.relativenumber = false
+  wo.signcolumn = "no"
+  wo.foldcolumn = "0"
+  wo.spell = false
+  if layout == "bottom" then
+    wo.winfixheight = true
+  elseif layout ~= "float" then
+    wo.winfixwidth = true
+  end
+  vim.w[win].duet_layout = layout
 end
 
 ---Open a window for `buf` with the configured layout. Focus does not move.
@@ -198,26 +255,12 @@ end
 ---@return string|nil err e.g. an invalid border, or E11 in the command-line window
 local function open_window(buf, title)
   local opts = config()
-  local columns, lines = editor_size()
-  local cfg = M.win_config(opts.layout, opts, columns, lines, title)
+  local cfg = M.win_config(opts.layout, opts, editor_size(), title)
   local ok, win = pcall(vim.api.nvim_open_win, buf, false, cfg)
   if not ok then
     return nil, ("terminal: cannot open window: %s"):format(win)
   end
-  -- [0]: local to this window and its buffer, like :setlocal.
-  local wo = vim.wo[win][0]
-  wo.number = false
-  wo.relativenumber = false
-  wo.signcolumn = "no"
-  wo.foldcolumn = "0"
-  wo.spell = false
-  if not is_float(win) then
-    if opts.layout == "bottom" then
-      wo.winfixheight = true
-    else
-      wo.winfixwidth = true
-    end
-  end
+  apply_window_options(win, opts.layout)
   return win
 end
 
@@ -227,16 +270,26 @@ local function title(agent)
   return (" %s "):format(agent.name)
 end
 
-local function reposition_floats()
+---On VimResized: centre and size floats again, and give splits with a fractional size
+---their share of the new editor size. Absolute split sizes are left alone, so a split the
+---user resized by hand keeps its size.
+local function relayout()
   local opts = config()
-  local columns, lines = editor_size()
+  local editor = editor_size()
   for _, session in pairs(sessions) do
     for _, win in ipairs(vim.fn.win_findbuf(session.buf)) do
       if is_float(win) then
-        local cfg = M.win_config("float", opts, columns, lines)
-        -- Keep the title and border the window was opened with.
+        -- Use the border the window has, which a later setup() may have changed in config.
+        local float = vim.tbl_extend("force", opts.float, { border = vim.api.nvim_win_get_config(win).border })
+        local cfg = M.win_config("float", vim.tbl_extend("force", opts, { float = float }), editor)
         cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
         vim.api.nvim_win_set_config(win, cfg)
+      elseif vim.w[win].duet_layout == "bottom" then
+        if opts.split.height <= 1 then
+          vim.api.nvim_win_set_height(win, M.resolve_size(opts.split.height, editor.lines))
+        end
+      elseif vim.w[win].duet_layout and opts.split.width <= 1 then
+        vim.api.nvim_win_set_width(win, M.resolve_size(opts.split.width, editor.columns))
       end
     end
   end
@@ -258,8 +311,8 @@ local function ensure_autocmds()
   })
   vim.api.nvim_create_autocmd("VimResized", {
     group = augroup,
-    desc = "duet: resize agent terminal floats",
-    callback = reposition_floats,
+    desc = "duet: resize agent terminals",
+    callback = relayout,
   })
 end
 
@@ -448,6 +501,7 @@ function Session.new(agent, opts)
   if win then
     prev_buf = vim.api.nvim_win_get_buf(win)
     vim.api.nvim_win_set_buf(win, self.buf)
+    apply_window_options(win, vim.w[win].duet_layout or (is_float(win) and "float" or config().layout))
   elseif not opts.hidden then
     local open_err
     win, open_err = open_window(self.buf, title(agent))
@@ -462,8 +516,11 @@ function Session.new(agent, opts)
   if not started then
     if opened then
       pcall(vim.api.nvim_win_close, win, true)
-    elseif prev_buf and vim.api.nvim_win_is_valid(win) and vim.api.nvim_buf_is_valid(prev_buf) then
-      vim.api.nvim_win_set_buf(win, prev_buf)
+    elseif vim.api.nvim_win_is_valid(win) then
+      -- Put the previous buffer back, or an empty one if it is gone, so deleting ours
+      -- below does not close a window we were lent.
+      local keep = prev_buf and vim.api.nvim_buf_is_valid(prev_buf) and prev_buf or vim.api.nvim_create_buf(true, false)
+      pcall(vim.api.nvim_win_set_buf, win, keep)
     end
     discard(self)
     return nil, err
@@ -553,11 +610,14 @@ local function is_last_window(win)
 end
 
 ---Hide the session's window in the current tab. The job keeps running.
+---@return boolean|nil ok
+---@return string|nil err e.g. E11 in the command-line window
 function Session:hide()
   local win = self:window()
   if not win then
-    return
+    return true
   end
+  local ok, err
   if is_last_window(win) then
     local alt = vim.api.nvim_win_call(win, function()
       return vim.fn.bufnr("#")
@@ -565,10 +625,14 @@ function Session:hide()
     if alt <= 0 or alt == self.buf or not vim.bo[alt].buflisted then
       alt = vim.api.nvim_create_buf(true, false)
     end
-    vim.api.nvim_win_set_buf(win, alt)
-    return
+    ok, err = pcall(vim.api.nvim_win_set_buf, win, alt)
+  else
+    ok, err = pcall(vim.api.nvim_win_close, win, false)
   end
-  vim.api.nvim_win_close(win, false)
+  if not ok then
+    return nil, ("terminal: cannot hide %s: %s"):format(self.agent.name, err)
+  end
+  return true
 end
 
 ---Show the session if it is hidden in the current tab, hide it otherwise.
@@ -576,19 +640,25 @@ end
 ---@return string|nil err
 function Session:toggle()
   if self:is_visible() then
-    self:hide()
-    return true
+    return self:hide()
   end
   local win, err = self:focus()
   return win and true, err
 end
 
----Stop the agent and wipe its buffer. The run dir is removed.
+---Stop the agent and wipe its buffer. The run dir is removed. The agent is stopped even
+---if the buffer can't be wiped (e.g. E11 in the command-line window).
+---@return boolean|nil ok
+---@return string|nil err
 function Session:stop()
   release(self)
   if vim.api.nvim_buf_is_valid(self.buf) then
-    vim.api.nvim_buf_delete(self.buf, { force = true })
+    local ok, err = pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
+    if not ok then
+      return nil, ("terminal: cannot close %s's buffer: %s"):format(self.agent.name, err)
+    end
   end
+  return true
 end
 
 ---Start a new session for the same agent and root, then stop this one. The new session
@@ -715,7 +785,10 @@ end
 function M.toggle(name)
   local session = target(name)
   if session and session:is_visible() then
-    session:hide()
+    local ok, err = session:hide()
+    if not ok then
+      return nil, err
+    end
     return session
   end
   return M.open(name)
@@ -735,11 +808,9 @@ function M.close(opts)
     return nil, "terminal: no agent session"
   end
   if opts.stop then
-    session:stop()
-  else
-    session:hide()
+    return session:stop()
   end
-  return true
+  return session:hide()
 end
 
 ---Restart the session, or start one if there is none.
@@ -798,11 +869,11 @@ M.cmd_restart = with_agent(M.restart)
 
 ---`:Duet[!] close [agent]`: hide the session, or stop it with `!`.
 ---@param args string[]
----@param opts duet.CommandOpts
+---@param opts? duet.CommandOpts
 ---@return boolean|nil
 ---@return string|nil err
 function M.cmd_close(args, opts)
-  return M.close({ stop = opts.bang, agent = args[1] })
+  return M.close({ stop = (opts or {}).bang, agent = args[1] })
 end
 
 return M
