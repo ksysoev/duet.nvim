@@ -343,6 +343,9 @@ output. The reason names the signal for codes above 128 (e.g. `137` is
 "killed (SIGKILL)"), and code 127 means "command not found".
 |duet-config-terminal-close_on_exit| changes which exits close the terminal.
 
+In a terminal kept after the agent exited, `i`, `a`, `I` or `A` restarts the
+agent in the same window, and `q` closes the terminal and ends the session.
+
 If the agent exits while its terminal is hidden and the terminal is kept,
 |:Duet-open| (or |:Duet|) first shows it, so you can read the output; opening
 it again starts a new session. Exits caused by duet (|:Duet-close| with `!`,

@@ -205,7 +205,10 @@ T["session"]["removes the run dir and keeps the terminal after an error exit"] =
   eq(info.buf_valid, true)
   eq(info.listed, true)
   eq(child.lua_get("_G.notes"), {
-    { msg = "[duet] fake exited with code 3: see the terminal output", level = vim.log.levels.ERROR },
+    {
+      msg = "[duet] fake exited with code 3: see the terminal output\nIn the terminal, press i to restart the agent or q to close it.",
+      level = vim.log.levels.ERROR,
+    },
   })
 end
 
@@ -284,8 +287,89 @@ T["exit"]["an error exit keeps the window and reports the last output"] = functi
   child.type_keys("k")
   eq(child.lua_get("vim.api.nvim_buf_is_valid(s.buf) and s:window() == win"), true)
   eq(child.lua_get("_G.notes"), {
-    { msg = "[duet] fake exited with code 3: see the terminal output\none\nboom", level = vim.log.levels.ERROR },
+    {
+      msg = "[duet] fake exited with code 3: see the terminal output\none\nboom\nIn the terminal, press i to restart the agent or q to close it.",
+      level = vim.log.levels.ERROR,
+    },
   })
+end
+
+T["exit"]["q closes an exited terminal"] = function()
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 3" })
+  local info = child.lua([[
+    local code = vim.api.nvim_get_current_win()
+    _G.s = assert(T.open())
+    _G.win = s:window()
+    wait(function() return s.exit_code ~= nil end)
+    return { code = code }
+  ]])
+  child.type_keys("q")
+  eq(
+    child.lua_get([[{
+      win = vim.api.nvim_win_is_valid(win), buf = vim.api.nvim_buf_is_valid(s.buf), listed = T.get(s.id) ~= nil,
+      wins = #vim.api.nvim_tabpage_list_wins(0), current = vim.api.nvim_get_current_win(),
+    }]]),
+    { win = false, buf = false, listed = false, wins = 1, current = info.code }
+  )
+  eq(#child.lua_get("_G.notes"), 1)
+end
+
+T["exit"]["i or a restarts an exited agent in the same window"] = MiniTest.new_set({
+  parametrize = { { "i" }, { "a" } },
+})
+
+T["exit"]["i or a restarts an exited agent in the same window"]["%s"] = function(key)
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 3" })
+  child.lua([[
+    _G.s = assert(T.open())
+    _G.win = s:window()
+    wait(function() return s.exit_code ~= nil end)
+  ]])
+  eq(child.api.nvim_get_mode().mode, "nt")
+  child.type_keys(key)
+  child.lua("wait(function() return T.current() ~= nil and T.current() ~= s end)")
+  local info = child.lua_get([[{
+    old = T.get(s.id) ~= nil, same_win = T.current():window() == win,
+    running = T.current():is_running(), current = vim.api.nvim_get_current_win() == win,
+  }]])
+  eq(info, { old = false, same_win = true, running = true, current = true })
+  eq(child.api.nvim_get_mode().mode, "t")
+end
+
+T["exit"]["entering terminal mode another way keeps the exited terminal"] = function()
+  fake("fake", { "sh", "-c", "sleep 0.2; exit 3" })
+  child.lua([[
+    _G.s = assert(T.open())
+    _G.win = s:window()
+    wait(function() return s.exit_code ~= nil end)
+  ]])
+  child.cmd("startinsert")
+  child.type_keys("j")
+  eq(child.api.nvim_get_mode().mode, "nt")
+  eq(
+    child.lua_get("{ T.current() == s, vim.api.nvim_win_get_buf(win) == s.buf, s:is_running() }"),
+    { true, true, false }
+  )
+end
+
+T["exit"]["stopping closes the panel even when wiping would keep the window"] = function()
+  fake("fake", CAT)
+  local info = child.lua([[
+    -- See "a clean exit closes the panel even when wiping would keep the window".
+    local delete = vim.api.nvim_buf_delete
+    vim.api.nvim_buf_delete = function(buf, opts)
+      for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+        vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+      end
+      return delete(buf, opts)
+    end
+    local s = assert(T.open())
+    local win = s:window()
+    assert(s:stop())
+    vim.api.nvim_buf_delete = delete
+    return { win_valid = vim.api.nvim_win_is_valid(win), wins = #vim.api.nvim_tabpage_list_wins(0) }
+  ]])
+  eq(info, { win_valid = false, wins = 1 })
 end
 
 T["exit"]["reports the reason"] = MiniTest.new_set({
@@ -332,7 +416,7 @@ T["exit"]["close_on_exit"]["%s, code %d"] = function(policy, code, kept, notes)
   eq(#got, notes)
   -- The terminal is gone, so there is nothing to open.
   if notes > 0 and not kept then
-    eq(got[1].msg:find(":Duet open", 1, true), nil)
+    eq(got[1].msg:find("press i", 1, true), nil)
   end
 end
 
@@ -341,7 +425,13 @@ T["exit"]["an error exit while hidden says how to see the output"] = function()
   child.lua("local s = assert(T.open()); s:hide(); wait(function() return s.exit_code ~= nil end)")
   local notes = child.lua_get("_G.notes")
   eq(#notes, 1)
-  eq(vim.endswith(notes[1].msg, "boom\nRun :Duet open to see the output."), true)
+  eq(
+    vim.endswith(
+      notes[1].msg,
+      "boom\nRun :Duet open to see the output, then press i to restart the agent or q to close it."
+    ),
+    true
+  )
 end
 
 T["exit"]["exits caused by duet are quiet"] = MiniTest.new_set({
@@ -1134,18 +1224,18 @@ end
 local message_cases = {
   {
     name = "no output",
-    args = { "claude", 3, {}, false },
+    args = { "claude", 3, {} },
     expected = "claude exited with code 3: see the terminal output",
   },
   {
     name = "with output",
-    args = { "claude", 137, { "a", "b" }, false },
+    args = { "claude", 137, { "a", "b" } },
     expected = "claude exited with code 137: killed (SIGKILL)\na\nb",
   },
   {
-    name = "hidden",
-    args = { "claude", 1, { "boom" }, true },
-    expected = "claude exited with code 1: see the terminal output\nboom\nRun :Duet open to see the output.",
+    name = "with a hint",
+    args = { "claude", 1, { "boom" }, "Press i." },
+    expected = "claude exited with code 1: see the terminal output\nboom\nPress i.",
   },
 }
 

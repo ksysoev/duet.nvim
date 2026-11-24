@@ -369,6 +369,19 @@ local function close_window(win, buf)
   return pcall(vim.api.nvim_win_set_buf, win, alt)
 end
 
+---Close every window that shows the session's buffer (see close_window). Wiping a buffer
+---only closes the current window if autocommands let it (e.g. a snacks.nvim dashboard next
+---to it does not), and leaves an empty buffer in it otherwise, so close them first.
+---@param self duet.Session
+local function close_windows(self)
+  for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
+    local ok, err = close_window(win, self.buf)
+    if not ok then
+      require("duet.log").warn("session %s: cannot close window %d: %s", self.id, win, err)
+    end
+  end
+end
+
 -- Exit handling -------------------------------------------------------------
 
 local SIGNALS = {
@@ -427,16 +440,17 @@ end
 ---@param name string agent name
 ---@param code integer
 ---@param lines string[] the terminal's last lines of output (see M.tail)
----@param hidden boolean the terminal is kept but not shown, so say how to see it
+---@param hint? string what the user can do next, as the last line
 ---@return string
-function M.exit_message(name, code, lines, hidden)
+function M.exit_message(name, code, lines, hint)
   local parts = { ("%s exited with code %d: %s"):format(name, code, M.exit_reason(code)) }
   vim.list_extend(parts, lines)
-  if hidden then
-    parts[#parts + 1] = "Run :Duet open to see the output."
-  end
+  parts[#parts + 1] = hint
   return table.concat(parts, "\n")
 end
+
+local HINT_SHOWN = "In the terminal, press i to restart the agent or q to close it."
+local HINT_HIDDEN = "Run :Duet open to see the output, then press i to restart the agent or q to close it."
 
 ---Whether `close_on_exit` closes the terminal after an exit with `code`.
 ---@param code integer
@@ -444,6 +458,46 @@ end
 local function closes_on(code)
   local policy = config().close_on_exit
   return policy == "always" or (policy == "success" and code == 0)
+end
+
+---Restart an exited session from its terminal, in the same window.
+---@param self duet.Session
+local function restart_exited(self)
+  if sessions[self.id] ~= self or self.job then
+    return
+  end
+  local new, err = self:restart()
+  if not new then
+    require("duet.util").notify(err, vim.log.levels.ERROR)
+    return
+  end
+  if new:is_visible() then
+    new:focus()
+  end
+end
+
+---Keep an exited terminal useful: `i`, `a`, `I` and `A` restart the agent in the same
+---window, and `q` closes the terminal and ends the session. Terminal-mode entered any other
+---way (from Insert mode in another window, a mouse click, a plugin) is left again at once:
+---Neovim would delete the terminal on the next key and leave an empty buffer in the window.
+---@param self duet.Session
+local function keep_exited(self)
+  for _, lhs in ipairs({ "i", "a", "I", "A" }) do
+    vim.keymap.set("n", lhs, function()
+      restart_exited(self)
+    end, { buffer = self.buf, desc = "duet: restart the exited agent" })
+  end
+  vim.keymap.set("n", "q", function()
+    self:stop()
+  end, { buffer = self.buf, desc = "duet: close the exited agent terminal" })
+  vim.api.nvim_create_autocmd("TermEnter", {
+    group = augroup,
+    buffer = self.buf,
+    desc = "duet: keep the exited agent terminal",
+    callback = function()
+      vim.cmd.stopinsert()
+    end,
+  })
 end
 
 ---@param self duet.Session
@@ -461,27 +515,21 @@ local function on_exit(self, code)
   local shown = valid and #vim.fn.win_findbuf(self.buf) > 0
   if code ~= 0 then
     local lines = valid and M.tail(vim.api.nvim_buf_get_lines(self.buf, 0, -1, false), TAIL_LINES) or {}
-    local msg = M.exit_message(self.agent.name, code, lines, valid and not close and not shown)
+    local hint = (valid and not close) and (shown and HINT_SHOWN or HINT_HIDDEN) or nil
+    local msg = M.exit_message(self.agent.name, code, lines, hint)
     require("duet.util").notify(msg, vim.log.levels.ERROR)
   end
   if not valid then
     return
   end
   if close then
-    -- Close the windows first: wiping a buffer only closes the current window if
-    -- autocommands let it (e.g. a snacks.nvim dashboard next to it does not), and
-    -- leaves an empty buffer in it otherwise.
-    for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
-      local ok, err = close_window(win, self.buf)
-      if not ok then
-        require("duet.log").warn("session %s: cannot close window %d: %s", self.id, win, err)
-      end
-    end
+    close_windows(self)
     -- BufUnload releases the session.
     pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
     return
   end
   self.exit_seen = shown
+  keep_exited(self)
   -- In terminal mode, the next key would close the exited terminal and its output.
   if vim.api.nvim_get_current_buf() == self.buf and vim.api.nvim_get_mode().mode == "t" then
     vim.cmd.stopinsert()
@@ -774,6 +822,7 @@ end
 function Session:stop()
   release(self)
   if vim.api.nvim_buf_is_valid(self.buf) then
+    close_windows(self)
     local ok, err = pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
     if not ok then
       return nil, ("terminal: cannot close %s's buffer: %s"):format(self.agent.name, err)
