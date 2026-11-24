@@ -23,6 +23,10 @@ T["helptags build without errors"] = function()
     "duet.setup()",
     "duet-agents",
     "duet.agents.get()",
+    "duet-terminal",
+    ":Duet-toggle",
+    "duet-config-terminal-layout",
+    "duet.terminal.current()",
   }) do
     eq({ tag, vim.tbl_contains(names, tag) }, { tag, true })
   end

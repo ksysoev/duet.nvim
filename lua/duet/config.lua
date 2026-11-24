@@ -16,7 +16,14 @@ M.defaults = {
   log_level = "warn",
   agent = "claude",
   agents = {},
-  terminal = {},
+  terminal = {
+    layout = "float",
+    float = { width = 0.9, height = 0.9, border = "rounded" },
+    split = { width = 0.4, height = 0.4 },
+    close_on_exit = false,
+    auto_insert = true,
+    keys = { ["<C-q>"] = "normal_mode" },
+  },
   review = {},
 }
 
@@ -60,6 +67,29 @@ local function validate_string_map(v)
   return true
 end
 
+local function one_of(values)
+  return function(v)
+    return vim.tbl_contains(values, v)
+  end
+end
+
+local function validate_size(v)
+  return type(v) == "number" and v > 0
+end
+
+-- Border names differ between Neovim versions, so any string passes here; nvim_open_win
+-- reports an unknown name when the terminal opens. A list must have 1, 2, 4 or 8 parts.
+local function validate_border(v)
+  if type(v) == "string" then
+    return true
+  end
+  return is_string_list(v) and vim.tbl_contains({ 1, 2, 4, 8 }, #v)
+end
+
+local function validate_key_action(v)
+  return v == false or (type(v) == "string" and vim.tbl_contains({ "normal_mode", "hide" }, v))
+end
+
 ---Schema keyed by dotted path. A `*` segment matches any key, e.g. "agents.*.cmd".
 ---@type table<string, duet.config.SchemaEntry>
 M.schema = {
@@ -74,6 +104,21 @@ M.schema = {
   ["agents.*.args"] = { type = is_string_list, desc = "list of strings" },
   ["agents.*.env"] = { type = validate_string_map, desc = "table of string to string" },
   terminal = { type = "table" },
+  ["terminal.layout"] = {
+    type = one_of({ "float", "right", "left", "bottom" }),
+    desc = '"float", "right", "left" or "bottom"',
+  },
+  ["terminal.float"] = { type = "table" },
+  ["terminal.float.width"] = { type = validate_size, desc = "positive number" },
+  ["terminal.float.height"] = { type = validate_size, desc = "positive number" },
+  ["terminal.float.border"] = { type = validate_border, desc = "border name or list of 1, 2, 4 or 8 strings" },
+  ["terminal.split"] = { type = "table" },
+  ["terminal.split.width"] = { type = validate_size, desc = "positive number" },
+  ["terminal.split.height"] = { type = validate_size, desc = "positive number" },
+  ["terminal.close_on_exit"] = { type = "boolean" },
+  ["terminal.auto_insert"] = { type = "boolean" },
+  ["terminal.keys"] = { type = "table", open = true },
+  ["terminal.keys.*"] = { type = validate_key_action, desc = '"normal_mode", "hide" or false' },
   review = { type = "table" },
 }
 
@@ -95,15 +140,17 @@ local function split(path)
   return vim.split(path, ".", { plain = true })
 end
 
----Find the schema entry for a dotted path, trying exact keys before wildcards.
+---Find the schema entry for an option path, trying exact keys before wildcards.
+---The path is a list of segments rather than a dotted string, because user keys (such as
+---the lhs in `terminal.keys`) may contain dots themselves.
 ---@param schema table<string, duet.config.SchemaEntry>
----@param path string
+---@param segments string[]
 ---@return duet.config.SchemaEntry|nil
-local function lookup(schema, path)
-  if schema[path] then
-    return schema[path]
+local function lookup(schema, segments)
+  local exact = schema[table.concat(segments, ".")]
+  if exact then
+    return exact
   end
-  local segments = split(path)
   for key, entry in pairs(schema) do
     local pattern = split(key)
     if #pattern == #segments then
@@ -147,8 +194,9 @@ function M.validate(opts, schema)
   local function walk(tbl, prefix, open)
     for _, key in ipairs(sorted_keys(tbl)) do
       local value = tbl[key]
-      local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
-      local entry = lookup(schema, path)
+      local segments = vim.list_extend(vim.deepcopy(prefix), { tostring(key) })
+      local path = table.concat(segments, ".")
+      local entry = lookup(schema, segments)
       if entry then
         local ok, msg = pcall(vim.validate, path, value, entry.type, entry.optional, entry.desc)
         if not ok then
@@ -158,11 +206,11 @@ function M.validate(opts, schema)
         unknown[#unknown + 1] = path
       end
       if is_dict(value) and (entry or open) then
-        walk(value, path, open or (entry ~= nil and entry.open == true))
+        walk(value, segments, open or (entry ~= nil and entry.open == true))
       end
     end
   end
-  walk(opts, "", false)
+  walk(opts, {}, false)
 
   if err then
     return false, err, unknown

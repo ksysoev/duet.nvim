@@ -31,6 +31,12 @@ function M.register(name, spec)
   registry[name] = spec
 end
 
+---Remove a subcommand of :Duet. Removing an unknown name does nothing.
+---@param name string
+function M.unregister(name)
+  registry[name] = nil
+end
+
 ---Names of the registered subcommands, sorted.
 ---@return string[]
 function M.names()
@@ -143,12 +149,46 @@ function M.complete(arglead, cmdline, cursorpos)
   return result
 end
 
--- Built-in subcommands. Register them here with a lazy require so lazy loading keeps working:
---
---   M.register("toggle", {
---     desc = "Toggle the agent terminal",
---     impl = function(args, opts) return require("duet.terminal").cmd_toggle(args, opts) end,
---     complete = function(arglead) return require("duet.agents").complete_names(arglead) end,
---   })
+-- Built-in subcommands. Each closure requires its feature module only when it runs, so
+-- lazy loading keeps working.
+
+local function complete_agent(arglead, args)
+  if #args > 0 then
+    return {}
+  end
+  return require("duet.agents").complete_names(arglead)
+end
+
+M.register("toggle", {
+  desc = "Toggle the agent terminal",
+  impl = function(args, opts)
+    return require("duet.terminal").cmd_toggle(args, opts)
+  end,
+  complete = complete_agent,
+})
+
+M.register("open", {
+  desc = "Open and focus the agent terminal",
+  impl = function(args, opts)
+    return require("duet.terminal").cmd_open(args, opts)
+  end,
+  complete = complete_agent,
+})
+
+M.register("close", {
+  desc = "Hide the agent terminal (:Duet! close stops the agent)",
+  impl = function(args, opts)
+    return require("duet.terminal").cmd_close(args, opts)
+  end,
+  complete = complete_agent,
+})
+
+M.register("restart", {
+  desc = "Restart the agent",
+  impl = function(args, opts)
+    return require("duet.terminal").cmd_restart(args, opts)
+  end,
+  complete = complete_agent,
+})
 
 return M

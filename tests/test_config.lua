@@ -29,9 +29,11 @@ T["merge"] = MiniTest.new_set()
 local merge_cases = {
   {
     name = "nested table merges",
-    opts = { terminal = { layout = "float" }, review = { a = { b = 1 } } },
+    opts = { terminal = { layout = "right", float = { width = 0.5 } }, review = { a = { b = 1 } } },
     check = function(c)
-      eq(c.terminal, { layout = "float" })
+      eq(c.terminal.layout, "right")
+      eq(c.terminal.float, { width = 0.5, height = 0.9, border = "rounded" })
+      eq(c.terminal.keys, { ["<C-q>"] = "normal_mode" })
       eq(c.review, { a = { b = 1 } })
       eq(c.agent, "claude")
     end,
@@ -54,10 +56,10 @@ local merge_cases = {
   },
   {
     name = "setup() twice does not stack",
-    setup_first = { terminal = { a = 1 } },
-    opts = { terminal = { b = 2 } },
+    setup_first = { review = { a = 1 } },
+    opts = { review = { b = 2 } },
     check = function(c)
-      eq(c.terminal, { b = 2 })
+      eq(c.review, { b = 2 })
     end,
   },
   {
@@ -107,6 +109,22 @@ T["validation error"] = MiniTest.new_set({
     { "agent cmd empty", { agents = { claude = { cmd = {} } } }, "^agents.claude.cmd: expected" },
     { "agent args with a number", { agents = { claude = { args = { 1 } } } }, "^agents.claude.args: expected" },
     { "agent env with a number", { agents = { claude = { env = { A = 1 } } } }, "^agents.claude.env: expected" },
+    { "unknown layout", { terminal = { layout = "top" } }, "^terminal.layout: expected" },
+    { "zero float width", { terminal = { float = { width = 0 } } }, "^terminal.float.width: expected" },
+    { "split height as a string", { terminal = { split = { height = "1" } } }, "^terminal.split.height: expected" },
+    { "border as a number", { terminal = { float = { border = 1 } } }, "^terminal.float.border: expected" },
+    {
+      "border list of 3",
+      { terminal = { float = { border = { "a", "b", "c" } } } },
+      "^terminal.float.border: expected",
+    },
+    { "close_on_exit as a string", { terminal = { close_on_exit = "yes" } }, "^terminal.close_on_exit: expected" },
+    { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
+    {
+      "key action under a dotted lhs",
+      { terminal = { keys = { ["<M-.>"] = "hid" } } },
+      "^terminal.keys.<M%-.>: expected",
+    },
   },
 })
 
@@ -130,6 +148,8 @@ T["unknown keys"] = MiniTest.new_set({
     { "key inside an open map", { agents = { anything = { cmd = { "x" } } } }, nil },
     { "list values are not keys", { agents = { x = { args = { "a", "b" } } } }, nil },
     { "agent env keys are not options", { agents = { x = { env = { FOO = "1" }, args = {} } } }, nil },
+    { "terminal keys are not options", { terminal = { keys = { ["<C-q>"] = false, ["<C-x>"] = "hide" } } }, nil },
+    { "dotted terminal keys are not options", { terminal = { keys = { ["<M-.>"] = "hide" } } }, nil },
   },
 })
 
