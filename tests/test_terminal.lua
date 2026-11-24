@@ -65,6 +65,18 @@ end
 
 local CAT = { "sh", "-c", "cat" }
 
+-- The child's mode once it settles. A mode change (startinsert, stopinsert) takes effect
+-- when the child is back in its main loop, after the call that asked for it returns, and
+-- nvim_get_mode() answers at once, so poll from here instead of reading it once.
+local function mode_becomes(want)
+  local mode
+  vim.wait(2000, function()
+    mode = child.api.nvim_get_mode().mode
+    return mode == want
+  end, 10)
+  return mode
+end
+
 local T = MiniTest.new_set({
   hooks = {
     pre_case = start,
@@ -275,15 +287,14 @@ end
 
 T["exit"]["an error exit keeps the window and reports the last output"] = function()
   fake("fake", { "sh", "-c", "read _; echo one; echo; echo 'boom   '; exit 3" })
-  -- Separate calls: startinsert takes effect once the call returns.
   child.lua("_G.s = assert(T.open()); _G.win = s:window()")
-  eq(child.api.nvim_get_mode().mode, "t")
+  eq(mode_becomes("t"), "t")
   child.type_keys("<CR>")
   child.lua("wait(function() return s.exit_code ~= nil end)")
   local info = child.lua_get("{ shown = s:window() == win, listed = T.get(s.id) ~= nil, running = s:is_running() }")
   eq(info, { shown = true, listed = true, running = false })
   -- Terminal mode is left, so the next key does not close the exited terminal.
-  eq(child.api.nvim_get_mode().mode, "nt")
+  eq(mode_becomes("nt"), "nt")
   child.type_keys("k")
   eq(child.lua_get("vim.api.nvim_buf_is_valid(s.buf) and s:window() == win"), true)
   eq(child.lua_get("_G.notes"), {
@@ -325,7 +336,7 @@ T["exit"]["i or a restarts an exited agent in the same window"]["%s"] = function
     _G.win = s:window()
     wait(function() return s.exit_code ~= nil end)
   ]])
-  eq(child.api.nvim_get_mode().mode, "nt")
+  eq(mode_becomes("nt"), "nt")
   child.type_keys(key)
   child.lua("wait(function() return T.current() ~= nil and T.current() ~= s end)")
   local info = child.lua_get([[{
@@ -333,7 +344,7 @@ T["exit"]["i or a restarts an exited agent in the same window"]["%s"] = function
     running = T.current():is_running(), current = vim.api.nvim_get_current_win() == win,
   }]])
   eq(info, { old = false, same_win = true, running = true, current = true })
-  eq(child.api.nvim_get_mode().mode, "t")
+  eq(mode_becomes("t"), "t")
 end
 
 T["exit"]["entering terminal mode another way keeps the exited terminal"] = function()
@@ -345,7 +356,7 @@ T["exit"]["entering terminal mode another way keeps the exited terminal"] = func
   ]])
   child.cmd("startinsert")
   child.type_keys("j")
-  eq(child.api.nvim_get_mode().mode, "nt")
+  eq(mode_becomes("nt"), "nt")
   eq(
     child.lua_get("{ T.current() == s, vim.api.nvim_win_get_buf(win) == s.buf, s:is_running() }"),
     { true, true, false }
