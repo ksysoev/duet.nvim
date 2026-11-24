@@ -11,6 +11,7 @@ CONTENTS                                                       *duet-contents*
   6. Log file ................................................ |duet-log|
   7. Lua API ................................................. |duet-api|
   8. Agents .................................................. |duet-agents|
+  9. Terminal ................................................ |duet-terminal|
 
 ==============================================================================
 1. INTRODUCTION                                     *duet* *duet-introduction*
@@ -49,7 +50,14 @@ Defaults: >lua
       log_level = "warn",
       agent = "claude",
       agents = {},
-      terminal = {},
+      terminal = {
+        layout = "float",
+        float = { width = 0.9, height = 0.9, border = "rounded" },
+        split = { width = 0.4, height = 0.4 },
+        close_on_exit = false,
+        auto_insert = true,
+        keys = { ["<C-q>"] = "normal_mode" },
+      },
       review = {},
     }
 <
@@ -101,8 +109,46 @@ agents ~
 
                                                         *duet-config-terminal*
 terminal ~
-    `table` (default: `{}`)
-    Agent terminal options. Filled in by upcoming features.
+    `table`
+    Agent terminal options. See |duet-terminal|.
+
+    Sizes below are a fraction of the editor when `<= 1`, otherwise a number
+    of columns or lines.
+
+                                                 *duet-config-terminal-layout*
+    layout ~
+        `string` (default: `"float"`)
+        Where the terminal opens: `"float"`, `"right"`, `"left"` (full-height
+        vertical splits) or `"bottom"` (full-width horizontal split).
+                                                  *duet-config-terminal-float*
+    float ~
+        `{ width, height, border }` (default:
+        `{ width = 0.9, height = 0.9, border = "rounded" }`)
+        Size and border of the float, which is centred in the editor.
+        `border` takes the values of the `border` key of
+        |nvim_open_win()|.
+                                                  *duet-config-terminal-split*
+    split ~
+        `{ width, height }` (default: `{ width = 0.4, height = 0.4 }`)
+        Width of the `"right"` and `"left"` splits, height of the `"bottom"`
+        split.
+                                          *duet-config-terminal-close_on_exit*
+    close_on_exit ~
+        `boolean` (default: `false`)
+        Wipe the terminal buffer when the agent exits. Otherwise the buffer
+        stays, with the exit message, until you close it or reopen the agent.
+                                            *duet-config-terminal-auto_insert*
+    auto_insert ~
+        `boolean` (default: `true`)
+        Enter |Terminal-mode| when the terminal is opened or entered.
+                                                   *duet-config-terminal-keys*
+    keys ~
+        `table<string, string|false>` (default:
+        `{ ["<C-q>"] = "normal_mode" }`)
+        Buffer-local mappings in the terminal, keyed by {lhs}. Actions:
+        - `"normal_mode"`: leave |Terminal-mode| (terminal mode only).
+        - `"hide"`: hide the terminal (terminal and normal mode).
+        - `false`: no mapping, e.g. to turn off a default.
 
                                                           *duet-config-review*
 review ~
@@ -116,9 +162,26 @@ review ~
     Run a duet subcommand. The range and `!` are passed to the subcommand.
     <Tab> completes subcommand names and, where supported, their arguments.
 
-:Duet
-    Without a subcommand, toggles the agent terminal once that feature is
-    available. Until then it shows the list of subcommands.
+:Duet                                                          *:Duet-toggle*
+:Duet toggle [{agent}]
+    Toggle the agent terminal for the current project: hide it if it is shown
+    in the current tab, otherwise open it (see |:Duet-open|). Without
+    {agent}, acts on the shown session, else the current one
+    (|duet.terminal.current()|), else starts |duet-config-agent|.
+
+:Duet open [{agent}]                                             *:Duet-open*
+    Show the agent terminal and move the cursor into it. Starts the agent if
+    it is not running for this project; an agent that has exited is
+    restarted.
+
+:Duet close                                                     *:Duet-close*
+:Duet! close
+    Hide the agent terminal; the agent keeps running. With `!`, stop the
+    agent and wipe its terminal buffer.
+
+:Duet restart [{agent}]                                       *:Duet-restart*
+    Stop the agent and start it again, in the same window if it is shown.
+    Starts it if it is not running.
 
 ==============================================================================
 5. HEALTH                                                        *duet-health*
@@ -148,6 +211,13 @@ require("duet").setup({opts})                                  *duet.setup()*
     Configure duet. See |duet-setup|. Returns `true`, or `nil` and an error
     message when the options are invalid.
 
+require("duet").toggle([{agent}])                             *duet.toggle()*
+require("duet").open([{agent}])                                 *duet.open()*
+require("duet").close([{opts}])                                *duet.close()*
+    Same as |:Duet-toggle|, |:Duet-open| and |:Duet-close|. {opts} may set
+    `stop = true` (like `:Duet! close`) and `agent`. `toggle` and `open`
+    return the session, or `nil` and an error message.
+
 require("duet.config").get()                              *duet.config.get()*
     Return the current configuration (treat it as read-only).
 
@@ -162,6 +232,9 @@ require("duet.commands").register({name}, {spec})   *duet.commands.register()*
                  the words typed before it, after the subcommand name.
     - `desc`     `string` (optional): one-line description.
     Registering an existing name replaces it.
+
+require("duet.commands").unregister({name})       *duet.commands.unregister()*
+    Remove a `:Duet` subcommand, built-in ones included.
 
 require("duet.health").register({name}, {fn})         *duet.health.register()*
     Add a section to `:checkhealth duet`. {fn} reports with |vim.health|
@@ -232,5 +305,41 @@ per-session directory), and optionally `mcp` (`{ name, command, env }`),
 The returned plan (a `duet.LaunchPlan`) has `argv`, `env`, and `files`, a
 list of `{ path, content }`. duet writes the files with mode 0600 before it
 starts the agent. Every path must be inside `spec.run_dir`.
+
+==============================================================================
+9. TERMINAL                                                    *duet-terminal*
+
+duet runs the agent CLI in a Neovim |terminal|, one session per agent and
+project. The project is the git root of the current directory (|getcwd()|),
+or the directory itself outside a repository; the agent runs there. Hiding
+the terminal keeps the agent running, so reopening it shows the same
+conversation.
+
+Each session gets a private directory, `stdpath("run")/duet/<id>/` (mode
+0700), for the files its adapter asks for (mode 0600), such as the MCP
+config. It is removed when the agent exits, and every agent is stopped when
+Neovim exits. The agent's environment has `$NVIM` set to |v:servername|; if
+Neovim has no server yet (for example with `--headless`), duet starts one.
+
+When the agent exits, duet shows its exit code. The terminal buffer stays,
+unless |duet-config-terminal-close_on_exit| is set; opening the agent again
+starts a new session.
+
+Terminal buffers have the filetype `duet_terminal`, a name of the form
+`duet://<agent>/<id>`, and `b:duet_session` set to the session id. Only one
+duet terminal is shown per tab page: opening another hides the first.
+
+require("duet.terminal").current()                  *duet.terminal.current()*
+    Return the session for the current context, or `nil`: the session of
+    the current buffer, else the most recently used session for the current
+    project. Never starts a session. A session has `id`, `agent`, `root`,
+    `buf`, `job` (`nil` once exited) and the methods `show()`, `hide()`,
+    `focus()`, `toggle()`, `restart()`, `stop()` and `is_visible()`.
+
+require("duet.terminal").get({id})                      *duet.terminal.get()*
+    Return the session with id {id} (see `b:duet_session`), or `nil`.
+
+require("duet.terminal").list()                        *duet.terminal.list()*
+    Return all sessions, most recently used first.
 
  vim:tw=78:ts=8:noet:ft=help:norl:
