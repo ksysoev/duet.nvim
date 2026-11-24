@@ -21,6 +21,10 @@ local T = MiniTest.new_set({
       capture = h.capture_notify()
       calls = {}
       commands = require("duet.commands")
+      -- Start from an empty registry: these tests cover the dispatcher, not the built-ins.
+      for _, name in ipairs(commands.names()) do
+        commands.unregister(name)
+      end
       vim.v.errmsg = ""
     end,
     post_case = function()

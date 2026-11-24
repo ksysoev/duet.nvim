@@ -37,6 +37,8 @@ local cases = {
   {
     name = ":Duet with no args runs without errors",
     check = function()
+      -- :Duet starts the default agent; use a harmless command instead of the real CLI.
+      child.lua([[require("duet").setup({ agents = { claude = { cmd = { "sh", "-c", "cat" } } } })]])
       MiniTest.expect.no_error(function()
         child.cmd("Duet")
       end)
