@@ -565,6 +565,168 @@ C["prompt sends what was typed"] = function()
   eq(wait_out(P .. "typed text" .. E .. "\r"), P .. "typed text" .. E .. "\r")
 end
 
+---Open `a.lua` with three lines in a temporary project, as the current buffer.
+local function code()
+  child.lua([[
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    vim.cmd.cd(dir)
+    vim.cmd.edit("a.lua")
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "local a = 1", "local b = 2", "return a + b" })
+    vim.bo.filetype = "lua"
+  ]])
+end
+
+C["send expands the selection"] = function()
+  fake()
+  code()
+  child.type_keys("j", "V", "j", ":", "Duet send Refactor {selection}<CR>")
+  local want = P .. "Refactor\na.lua:L2-L3\n```lua\nlocal b = 2\nreturn a + b\n```" .. E .. "\r"
+  eq(wait_out(want), want)
+end
+
+C["send expands a character-wise selection"] = function()
+  fake()
+  code()
+  child.api.nvim_win_set_cursor(0, { 3, 7 })
+  child.type_keys("v", "$", "h", ":", "Duet send What is {selection}?<CR>")
+  local want = P .. "What is\na.lua:L3\n```lua\na + b\n```\n?" .. E .. "\r"
+  eq(wait_out(want), want)
+end
+
+C["send expands inline placeholders and leaves unknown ones"] = function()
+  fake()
+  code()
+  child.api.nvim_win_set_cursor(0, { 2, 0 })
+  child.cmd("Duet send Look at {this} in {file}, not {foo}")
+  local want = P .. "Look at a.lua:L2 in a.lua, not {foo}" .. E .. "\r"
+  eq(wait_out(want), want)
+end
+
+C["send refuses when every placeholder is empty"] = function()
+  fake()
+  code()
+  child.cmd("Duet send Refactor {selection}")
+  eq(
+    child.lua_get("_G.notes[1].msg"),
+    "[duet] send: nothing to send: {selection} is empty (no range or selection given)"
+  )
+  eq(child.lua_get("#require('duet.terminal').list()"), 0)
+end
+
+C["prompt expands what was typed, with the context from before the input"] = function()
+  fake()
+  code()
+  child.api.nvim_win_set_cursor(0, { 3, 0 })
+  child.lua([[
+    vim.ui.input = function(_, cb)
+      -- The window changes while the input is open.
+      vim.cmd("new")
+      cb("Explain {this}")
+    end
+  ]])
+  child.cmd("Duet prompt")
+  eq(wait_out(P .. "Explain a.lua:L3" .. E .. "\r"), P .. "Explain a.lua:L3" .. E .. "\r")
+end
+
+C["ask sends a prompt template"] = function()
+  fake()
+  code()
+  child.api.nvim_win_set_cursor(0, { 2, 0 })
+  child.cmd("Duet ask explain")
+  eq(wait_out(P .. "Explain a.lua:L2" .. E .. "\r"), P .. "Explain a.lua:L2" .. E .. "\r")
+end
+
+C["ask! only pastes, and uses the range"] = function()
+  fake()
+  code()
+  child.lua([[
+    local ns = vim.api.nvim_create_namespace("t")
+    vim.diagnostic.set(ns, 0, {
+      { lnum = 0, col = 0, severity = vim.diagnostic.severity.ERROR, message = "outside" },
+      { lnum = 2, col = 0, severity = vim.diagnostic.severity.WARN, message = "inside" },
+    })
+  ]])
+  child.cmd("2,3Duet! ask fix")
+  eq(wait_out(P .. "Fix\na.lua:3: [WARN] inside" .. E), P .. "Fix\na.lua:3: [WARN] inside" .. E)
+end
+
+C["ask uses prompts from the config"] = function()
+  fake(nil, { prompts = { tests = "Write tests for {file}", explain = false } })
+  code()
+  child.cmd("Duet ask tests")
+  eq(wait_out(P .. "Write tests for a.lua" .. E .. "\r"), P .. "Write tests for a.lua" .. E .. "\r")
+  child.cmd("Duet ask explain")
+  eq(child.lua_get("_G.notes[#_G.notes].msg"), "[duet] ask: unknown prompt 'explain' (available: fix, review, tests)")
+end
+
+C["ask without a name picks one"] = function()
+  fake()
+  code()
+  child.lua([[
+    vim.ui.select = function(items, opts, cb)
+      _G.picked = { items = items, prompt = opts.prompt, first = opts.format_item(items[1]) }
+      cb("review")
+    end
+  ]])
+  child.cmd("Duet ask")
+  eq(
+    child.lua_get("_G.picked"),
+    { items = { "explain", "fix", "review" }, prompt = "duet ask", first = "explain: Explain {this}" }
+  )
+  eq(wait_out(P .. "Review a.lua" .. E .. "\r"), P .. "Review a.lua" .. E .. "\r")
+end
+
+C["ask sends nothing when the picker is cancelled"] = function()
+  fake()
+  code()
+  child.lua("vim.ui.select = function(_, _, cb) cb(nil) end")
+  child.cmd("Duet ask")
+  eq(child.lua_get("#require('duet.terminal').list()"), 0)
+  eq(child.lua_get("_G.notes"), {})
+end
+
+C["ask reports errors"] = function()
+  fake()
+  code()
+  child.cmd("Duet ask nope")
+  eq(child.lua_get("_G.notes[1].msg"), "[duet] ask: unknown prompt 'nope' (available: explain, fix, review)")
+  child.cmd("Duet ask fix now")
+  eq(child.lua_get("_G.notes[2].msg"), "[duet] ask: usage: :Duet ask [name]")
+  child.cmd("Duet ask fix")
+  eq(child.lua_get("_G.notes[3].msg"), "[duet] ask: fix: nothing to send: {diagnostics} is empty")
+  eq(child.lua_get("#require('duet.terminal').list()"), 0)
+end
+
+C["ask completes prompt names"] = function()
+  fake()
+  eq(child.fn.getcompletion("Duet ask ", "cmdline"), { "explain", "fix", "review" })
+  eq(child.fn.getcompletion("Duet ask f", "cmdline"), { "fix" })
+  eq(child.fn.getcompletion("Duet ask fix ", "cmdline"), {})
+end
+
+C["duet.ask() from visual mode sends the selection and leaves visual mode"] = function()
+  fake(nil, { prompts = { refactor = "Refactor {selection}" } })
+  code()
+  child.lua([[
+    vim.keymap.set("x", "<F4>", function()
+      _G.r = { require("duet").ask("refactor") }
+    end)
+  ]])
+  child.type_keys("V", "<F4>")
+  eq(child.lua_get("_G.r"), { true })
+  eq(child.fn.mode(), "n")
+  local want = P .. "Refactor\na.lua:L1\n```lua\nlocal a = 1\n```" .. E .. "\r"
+  eq(wait_out(want), want)
+end
+
+C["duet.render() expands without sending"] = function()
+  fake()
+  code()
+  eq(child.lua_get("{ require('duet').render('{file} {foo}') }"), { "a.lua {foo}", { used = { "file" }, empty = {} } })
+  eq(child.lua_get("#require('duet.terminal').list()"), 0)
+end
+
 C["prompt sends nothing when cancelled"] = function()
   fake()
   child.lua("vim.ui.input = function(_, cb) cb(nil) end")

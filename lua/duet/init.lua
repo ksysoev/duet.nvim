@@ -47,4 +47,35 @@ function M.send(text, opts)
   return require("duet.send").send(text, opts)
 end
 
+---Leave visual mode, after its selection has been captured, as a `:` mapping would.
+local function leave_visual()
+  if vim.fn.mode():match("^[vV\22]") then
+    vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
+  end
+end
+
+---Send prompt template `name` (see |duet-config-prompts|) with the current context: the
+---visual selection when called from visual mode. See |duet.ask()|.
+---@param name string
+---@param opts? duet.AskOpts
+---@return boolean|nil ok
+---@return string|nil err
+function M.ask(name, opts)
+  opts = vim.deepcopy(opts or {})
+  opts.ctx = opts.ctx or require("duet.context").capture({ agent = opts.agent })
+  leave_visual()
+  return require("duet.context.prompts").ask(name, opts)
+end
+
+---Expand the `{name}` placeholders in `template` with the current context: the visual
+---selection when called from visual mode. Nothing is sent. See |duet.render()|.
+---@param template string
+---@return string text
+---@return duet.RenderInfo info which placeholders were used, and which were empty
+function M.render(template)
+  vim.validate("template", template, "string")
+  local context = require("duet.context")
+  return context.render(template, context.capture())
+end
+
 return M

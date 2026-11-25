@@ -290,7 +290,22 @@ end
 
 -- Command handlers ------------------------------------------------------------
 
----`:Duet[!] send <text>`: send the text and submit it, or only paste it with `!`.
+---Expand `{name}` placeholders in `text` with `ctx`, then send it.
+---@param text string
+---@param ctx duet.Context
+---@param submit boolean
+---@return boolean|nil
+---@return string|nil err
+local function expand_and_send(text, ctx, submit)
+  local expanded, err = require("duet.context").expand(text, ctx)
+  if not expanded then
+    return nil, "send: " .. err
+  end
+  return M.send(expanded, { submit = submit })
+end
+
+---`:[range]Duet[!] send <text>`: expand the placeholders in the text (see
+---|duet-context|), send it and submit it, or only paste it with `!`.
 ---@param args string[]
 ---@param opts? duet.CommandOpts
 ---@return boolean|nil
@@ -301,22 +316,24 @@ function M.cmd_send(args, opts)
   if vim.trim(text) == "" then
     return nil, "send: usage: :Duet send <text>"
   end
-  return M.send(text, { submit = not opts.bang })
+  return expand_and_send(text, require("duet.context").capture(opts), not opts.bang)
 end
 
----`:Duet[!] prompt [text]`: ask for text with vim.ui.input (prefilled with `text`) and
----send it, or only paste it with `!`. Cancelling sends nothing.
+---`:[range]Duet[!] prompt [text]`: ask for text with vim.ui.input (prefilled with
+---`text`), expand its placeholders and send it, or only paste it with `!`. The context
+---is captured before the input opens. Cancelling sends nothing.
 ---@param args string[]
 ---@param opts? duet.CommandOpts
 ---@return boolean
 function M.cmd_prompt(args, opts)
   opts = opts or {}
   local default = opts.rest or table.concat(args, " ")
+  local ctx = require("duet.context").capture(opts)
   vim.ui.input({ prompt = "duet> ", default = default }, function(input)
     if input == nil or vim.trim(input) == "" then
       return
     end
-    local ok, err = M.send(input, { submit = not opts.bang })
+    local ok, err = expand_and_send(input, ctx, not opts.bang)
     if not ok then
       require("duet.util").notify(err, vim.log.levels.ERROR)
     end

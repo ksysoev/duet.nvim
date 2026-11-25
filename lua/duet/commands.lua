@@ -192,9 +192,19 @@ M.register("restart", {
 })
 
 M.register("send", {
-  desc = "Send text to the agent and submit it (:Duet! send only pastes it)",
+  desc = "Send text, with {placeholders} expanded, to the agent (:Duet! send only pastes it)",
   impl = function(args, opts)
     return require("duet.send").cmd_send(args, opts)
+  end,
+})
+
+M.register("ask", {
+  desc = "Send a prompt template (:Duet! ask only pastes it)",
+  impl = function(args, opts)
+    return require("duet.context.prompts").cmd_ask(args, opts)
+  end,
+  complete = function(arglead, args)
+    return require("duet.context.prompts").complete(arglead, args)
   end,
 })
 
