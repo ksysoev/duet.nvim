@@ -34,6 +34,14 @@ T["helptags build without errors"] = function()
     "duet.send()",
     "duet-config-send",
     "duet.terminal.ensure()",
+    "duet-context",
+    "duet-context-providers",
+    "duet-context-ctx",
+    ":Duet-ask",
+    "duet-config-prompts",
+    "duet.ask()",
+    "duet.render()",
+    "duet.context.register()",
   }) do
     eq({ tag, vim.tbl_contains(names, tag) }, { tag, true })
   end

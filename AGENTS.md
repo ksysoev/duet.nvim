@@ -69,7 +69,9 @@ lua/duet/
   agents/claude.lua        -- Claude Code adapter
   terminal.lua             -- agent sessions (spawn, toggle, layouts)
   send.lua                 -- bracketed paste, submit, readiness
-  context/                 -- providers ({file},{this},{selection},…) and templates
+  context/init.lua         -- provider registry, capture(), render() of {name} placeholders
+  context/providers/*.lua  -- built-in providers ({file},{this},{selection},…)
+  context/prompts.lua      -- prompt templates and :Duet ask
   links.lua  watch.lua     -- path:line links in terminal output; auto checktime
   launch.lua               -- builds the LaunchSpec (MCP server, env, system prompt)
   broker.lua               -- tool/prompt/hook registry plus pending requests
@@ -104,7 +106,7 @@ These are the main interfaces. Change them only deliberately, and update #1 and 
 ---@field capabilities { mcp: boolean, plan_hook: boolean, system_prompt: boolean }
 ---@field launch fun(self, spec: duet.LaunchSpec): duet.LaunchPlan   -- pure: argv, env, files to write
 ---@field is_ready? fun(self, lines: string[]): boolean
----@field format_ref? fun(self, path: string, range?: integer[]): string  -- e.g. "@path:L10-L20"
+---@field format_ref? fun(self, path: string, range?: integer[]): string  -- e.g. "@path (lines 10-20)"
 ---@field health? fun(self)                                            -- extra vim.health reports
 
 ---@class duet.LaunchSpec              -- built by the core
