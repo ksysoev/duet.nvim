@@ -263,7 +263,8 @@ S["sends 100 KB in order, in chunks"] = function()
     eq(n <= 4096, true)
   end
   -- send() returned after the first write: the rest went out on later loop turns.
-  eq(child.lua_get("_G.writes_at_return"), 1)
+  -- send() returned before writing anything: the writes went out on later loop turns.
+  eq(child.lua_get("_G.writes_at_return"), 0)
   -- The markers went on their own; the last write is the submit.
   eq(child.lua_get("{ _G.writes[1], _G.writes[#_G.writes - 1], _G.writes[#_G.writes] }"), { P, E, "\r" })
 end
@@ -319,21 +320,66 @@ S["fails when the agent keeps asking"] = function()
 end
 
 S["pastes without submitting when a dialog opens before Enter"] = function()
-  fake(nil, { send = { submit_delay_ms = 300 } })
+  fake(nil, { send = { submit_delay_ms = 100 } })
   child.lua([[
     _G.send("x")
-    _G.send("y", { submit = false })
-    -- Open the dialog once the paste is written, during the submit delay.
+    _G.send("y")
+    -- Open the dialog once the paste is written, during the submit delay, with the
+    -- terminal hidden.
     vim.wait(3000, function() return _G.writes[#_G.writes] == E end, 5)
     _G.dialog = true
+    require("duet.terminal").list()[1]:hide()
   ]])
-  local done = child.lua_get("_G.wait_done(1)")
-  eq(done, { "send: fake is asking something: the text was pasted but not submitted" })
-  -- The next send waits for the dialog to close, then goes on.
+  -- "y" is dropped: pasted after "x", it would be submitted together with it.
+  local msg = "send: fake is asking something: the text was pasted but not submitted"
+  eq(child.lua_get("_G.wait_done(2)"), { msg, msg })
+  child.lua("_G.dialog = false; vim.wait(300)")
+  eq(child.lua_get("_G.read(_G.out)"), P .. "x" .. E)
+  -- The terminal is shown, so the user sees the dialog and the text left in the input.
+  eq(child.lua_get("require('duet.terminal').list()[1]:is_visible()"), true)
+end
+
+S["submits when the agent looks busy only for a moment before Enter"] = function()
+  fake(nil, { send = { submit_delay_ms = 50 } })
+  child.lua([[
+    _G.send("x")
+    vim.wait(3000, function() return _G.writes[#_G.writes] == E end, 5)
+    -- A redraw: the input box is off screen for less than the grace period.
+    _G.dialog = true
+    vim.defer_fn(function() _G.dialog = false end, 200)
+  ]])
+  eq(child.lua_get("_G.wait_done(1)"), { "ok" })
+  eq(wait_out(P .. "x" .. E .. "\r"), P .. "x" .. E .. "\r")
+end
+
+S["shows a hidden agent that is asking something"] = function()
+  fake()
+  child.lua([[
+    _G.s = assert(require("duet.terminal").ensure())
+    vim.wait(3000, function() return _G.s:is_ready() end, 10)
+    _G.dialog = true
+    _G.win = vim.api.nvim_get_current_win()
+    _G.visible_before = _G.s:is_visible()
+    _G.send("z")
+  ]])
+  eq(child.lua_get("_G.visible_before"), false)
+  eq(child.lua_get("vim.wait(1000, function() return _G.s:is_visible() end, 10)"), true)
+  eq(child.lua_get("vim.api.nvim_get_current_win() == _G.win"), true)
   child.lua("_G.dialog = false")
-  eq(child.lua_get("_G.wait_done(2)")[2], "ok")
-  local want = P .. "x" .. E .. P .. "y" .. E
-  eq(wait_out(want), want)
+  eq(wait_out(P .. "z" .. E .. "\r"), P .. "z" .. E .. "\r")
+end
+
+S["calls on_done after send() returns, even for an early error"] = function()
+  fake()
+  child.lua([[
+    _G.s = assert(require("duet.terminal").ensure())
+    _G.ready = function() error("boom") end
+    _G.r = _G.send("x")
+    _G.at_return = #_G.done
+  ]])
+  eq(child.lua_get("{ _G.r, _G.at_return }"), { true, 0 })
+  local done = child.lua_get("_G.wait_done(1)")
+  eq(done[1]:find("fake is_ready failed: .*boom") ~= nil, true)
 end
 
 S["fails queued sends when the agent is stopped"] = function()
@@ -378,6 +424,26 @@ S["shows an exit not seen yet instead of restarting"] = function()
   -- Seen now: the next send restarts the agent.
   eq(child.lua_get("_G.send('hi')"), true)
   eq(wait_out(P .. "hi" .. E .. "\r"), P .. "hi" .. E .. "\r")
+end
+
+S["reports a failure to show an exit not seen yet"] = function()
+  fake([[exit 3]])
+  child.lua([[
+    _G.first = assert(require("duet.terminal").ensure())
+    vim.wait(3000, function() return not _G.first:is_running() end, 10)
+    _G.first.show = function()
+      return nil, "terminal: cannot open window: boom"
+    end
+  ]])
+  eq(child.lua_get("{ require('duet').send('hi') }"), { vim.NIL, "terminal: cannot open window: boom" })
+  eq(child.lua_get("_G.first.exit_seen"), false)
+  -- Once it can be shown, it is shown first instead of being restarted.
+  child.lua("_G.first.show = nil")
+  eq(
+    child.lua_get("{ require('duet').send('hi') }"),
+    { vim.NIL, "terminal: fake exited: see its terminal, then try again" }
+  )
+  eq(child.lua_get("{ _G.first:is_visible(), _G.first.exit_seen }"), { true, true })
 end
 
 S["focuses the terminal with focus = true"] = function()

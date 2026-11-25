@@ -35,7 +35,9 @@ local enlarging = false
 
 local FILETYPE = "duet_terminal"
 -- Readiness polling (Session:when_ready): how often, and how many of the terminal's last
--- non-blank lines the adapter's is_ready sees.
+-- non-blank lines the adapter's is_ready sees. Few lines fail safe: missing an input box
+-- only makes a send wait, but an old one in the scrollback could pass for ready while a
+-- dialog is open. Claude Code shows a multi-line paste as one line, so its box stays short.
 local READY_POLL_MS = 50
 local READY_LINES = 50
 
@@ -1185,9 +1187,10 @@ function Session:is_ready()
 end
 
 ---Call `cb` once the agent's TUI accepts input (see Session:is_ready). Polls without
----blocking; `cb` gets an error after `timeout_ms`, or if the job exits first.
+---blocking; `cb` gets an error after `timeout_ms` (with `timed_out` set), or if the job
+---exits or is stopped first.
 ---@param timeout_ms integer
----@param cb fun(err?: string)
+---@param cb fun(err?: string, timed_out?: boolean)
 function Session:when_ready(timeout_ms, cb)
   local ready, err = self:is_ready()
   if ready or err then
@@ -1197,14 +1200,14 @@ function Session:when_ready(timeout_ms, cb)
   local timer = assert(vim.uv.new_timer())
   local deadline = vim.uv.now() + timeout_ms
   local done = false
-  local function finish(finish_err)
+  local function finish(finish_err, timed_out)
     if done then
       return
     end
     done = true
     timer:stop()
     timer:close()
-    cb(finish_err)
+    cb(finish_err, timed_out)
   end
   timer:start(
     READY_POLL_MS,
@@ -1221,7 +1224,8 @@ function Session:when_ready(timeout_ms, cb)
           ("terminal: %s is not ready for input after %d ms (answer its prompt in the terminal, then try again)"):format(
             self.agent.name,
             timeout_ms
-          )
+          ),
+          true
         )
       end
     end)
@@ -1438,7 +1442,10 @@ function M.ensure(name, opts)
     return session
   end
   if session and not session.exit_seen then
-    session:show()
+    local win, show_err = session:show()
+    if not win then
+      return nil, show_err
+    end
     return nil, ("terminal: %s exited: see its terminal, then try again"):format(session.agent.name)
   end
   if session then

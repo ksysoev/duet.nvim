@@ -312,7 +312,8 @@ require("duet").send({text} [, {opts}])                          *duet.send()*
                  could not be. Without it, such errors are shown.
     Returns `true` once the text is queued, or `nil` and an error message
     (for example for empty text, or when the agent cannot start); `on_done`
-    is not called then.
+    is not called then. `on_done` is always called after `send()` has
+    returned.
 
 require("duet.config").get()                              *duet.config.get()*
     Return the current configuration (treat it as read-only).
@@ -497,8 +498,15 @@ sent, each one whole.
 Each send waits until the agent is ready for input: its input prompt is on
 screen, not a dialog (see |duet-config-send-ready_timeout_ms|). Text never
 goes into a dialog, such as a permission prompt, where <Enter> would answer
-it. If a dialog opens after the paste but before <Enter>, the text is left
-in the agent's input without being submitted, and duet tells you.
+it. If the agent's terminal is hidden while it asks something, duet shows
+it, without moving the cursor.
+
+If a dialog opens after the paste but before <Enter>, the text is left in
+the agent's input without being submitted, and duet tells you and shows the
+terminal. Texts sent after it and still waiting are dropped: pasted after
+it, they would be submitted together with it. duet waits a moment before it
+decides a dialog opened, since the input prompt can leave the screen
+briefly while the agent redraws.
 
 If the agent is not running, duet starts it and shows its terminal without
 moving the cursor. A first start in a new folder may ask you something

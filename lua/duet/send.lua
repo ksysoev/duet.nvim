@@ -15,6 +15,9 @@ M.PASTE_END = "\27[201~"
 M.SUBMIT = "\r"
 -- Bytes per nvim_chan_send call.
 M.CHUNK_SIZE = 4096
+-- How long the agent may look not ready when Enter is due before duet takes it for a
+-- dialog: a redraw can leave the input box off screen for a moment.
+M.SUBMIT_GRACE_MS = 500
 
 ---@class duet.SendOpts
 ---@field submit? boolean press Enter after the paste (default: true)
@@ -129,6 +132,19 @@ local function finish(items, err)
   end
 end
 
+---Show the session if it is hidden, without moving the cursor, so the user sees what
+---the agent is asking.
+---@param session duet.Session
+local function reveal(session)
+  if session:is_visible() then
+    return
+  end
+  local win, err = session:show()
+  if not win then
+    require("duet.log").warn("session %s: cannot show the terminal: %s", session.id, err)
+  end
+end
+
 ---Write the session's queued items one after another, until its queue is empty.
 ---@param session duet.Session
 local function process(session)
@@ -139,11 +155,10 @@ local function process(session)
     return
   end
 
-  ---Finish the item, with an error that concerns it alone, and go on with the next one.
-  ---@param err? string
-  local function done(err)
+  ---Finish the item and go on with the next one.
+  local function done()
     table.remove(queue, 1)
-    finish({ item }, err)
+    finish({ item })
     process(session)
   end
 
@@ -153,6 +168,12 @@ local function process(session)
     queues[session.id] = nil
     require("duet.log").warn("session %s: %s", session.id, err)
     finish(queue, err)
+  end
+
+  -- The agent is starting up or asking something (a dialog): let the user see it.
+  local ready_now, now_err = session:is_ready()
+  if not ready_now and not now_err then
+    reveal(session)
   end
 
   session:when_ready(require("duet.config").get().send.ready_timeout_ms, function(ready_err)
@@ -165,22 +186,24 @@ local function process(session)
     local i = 0
     local function submit()
       -- The agent may have started asking something (a permission dialog) since the
-      -- paste: Enter would answer it. Leave the text in its input instead.
-      local ready, gone_err = session:is_ready()
-      if gone_err then
-        fail(gone_err)
-        return
-      end
-      if not ready then
-        done(("send: %s is asking something: the text was pasted but not submitted"):format(session.agent.name))
-        return
-      end
-      local ok, err = write(session, M.SUBMIT)
-      if not ok then
-        fail(err)
-        return
-      end
-      done()
+      -- paste: Enter would answer it. Leave the text in its input instead, and drop the
+      -- sends queued after it, which would be pasted after it and submitted with it.
+      session:when_ready(M.SUBMIT_GRACE_MS, function(submit_err, timed_out)
+        if timed_out then
+          reveal(session)
+          fail(("send: %s is asking something: the text was pasted but not submitted"):format(session.agent.name))
+          return
+        elseif submit_err then
+          fail(submit_err)
+          return
+        end
+        local ok, err = write(session, M.SUBMIT)
+        if not ok then
+          fail(err)
+          return
+        end
+        done()
+      end)
     end
     local function write_next()
       i = i + 1
@@ -206,10 +229,12 @@ end
 ---Send text to the agent as one paste, and submit it. Returns once the text is queued;
 ---`opts.on_done` tells when it has been written. Starts the agent if it isn't running
 ---(showing its terminal, without moving the cursor). Each send waits until the agent's
----TUI is ready for input, so text never goes into a dialog; if a dialog opens between
----the paste and Enter, the text is left pasted but not submitted.
+---TUI is ready for input, so text never goes into a dialog; a hidden agent that is
+---asking something is shown. If a dialog opens between the paste and Enter, the text is
+---left pasted but not submitted, and the sends queued after it are dropped.
 ---Errors found at once are returned and `on_done` is not called. Later errors go to
----`on_done`, or are shown to the user if there is none. See |duet.send()|.
+---`on_done`, or are shown to the user if there is none. `on_done` is always called after
+---send() has returned. See |duet.send()|.
 ---@param text string
 ---@param opts? duet.SendOpts
 ---@return boolean|nil ok
@@ -249,7 +274,10 @@ function M.send(text, opts)
   end
   queue[#queue + 1] = { text = clean, submit = opts.submit ~= false, on_done = opts.on_done }
   if idle then
-    process(session)
+    -- On the next loop turn, so on_done never runs before send() returns.
+    vim.schedule(function()
+      process(session)
+    end)
   end
   return true
 end
