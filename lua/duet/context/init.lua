@@ -14,8 +14,8 @@ M.MAX_ITEMS = 200
 ---@field start_line integer 1-based, inclusive
 ---@field end_line integer 1-based, inclusive
 ---@field mode "line"|"char"|"block"
----@field start_col? integer 1-based byte column ("char" and "block" only)
----@field end_col? integer 1-based byte column, inclusive ("char" and "block" only)
+---@field start_col? integer 1-based byte column on `start_line` ("char" and "block" only)
+---@field end_col? integer 1-based byte column on `end_line`, inclusive ("char" and "block" only)
 
 ---@class duet.Context
 ---@field buf integer buffer the context is about
@@ -34,13 +34,13 @@ M.MAX_ITEMS = 200
 
 ---@class duet.RenderInfo
 ---@field used string[] registered placeholders in the template, in order of first use
----@field empty string[] those of them that rendered empty
+---@field empty string[] those of them that rendered empty (failed ones included)
+---@field errors table<string, string> why a provider failed, by name, e.g. "{mine} failed: …"
 
 ---@class duet.CaptureOpts
 ---@field range? integer number of range items given to the command (0, 1 or 2)
 ---@field line1? integer first line of the range
 ---@field line2? integer last line of the range
----@field win? integer window to capture (default: the current one)
 ---@field agent? string agent whose references to use (default: the current session's)
 
 ---Built-in providers: name → module. Each module returns a table of providers by name.
@@ -127,16 +127,16 @@ local function is_code(buf)
   return vim.bo[buf].buftype == "" and vim.b[buf].duet_session == nil
 end
 
----The window to take context from: `win` when it shows code, else the previous window,
----else the first window showing code in the tab, else `win`.
----@param win integer
+---The window to take context from: the current one when it shows code, else the
+---previous window, else the first window showing code in the tab, else the current one.
 ---@return integer
-local function code_window(win)
+local function code_window()
+  local win = vim.api.nvim_get_current_win()
   if is_code(vim.api.nvim_win_get_buf(win)) then
     return win
   end
   local candidates = { vim.fn.win_getid(vim.fn.winnr("#")) }
-  vim.list_extend(candidates, vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win)))
+  vim.list_extend(candidates, vim.api.nvim_tabpage_list_wins(0))
   for _, id in ipairs(candidates) do
     if
       id ~= 0
@@ -152,9 +152,21 @@ end
 
 local VISUAL_MODES = { v = "char", V = "line", ["\22"] = "block" }
 
----A range from two positions (`{ line, col }`, 1-based), in either order.
----@param a integer[]
----@param b integer[]
+---A position `{ line, col }` (1-based) from getpos(), with the column moved back onto the
+---line: in visual mode the cursor can sit just past the last character (`v$`).
+---@param buf integer
+---@param pos integer[] getpos() result
+---@return integer[]
+local function on_line(buf, pos)
+  local line = vim.api.nvim_buf_get_lines(buf, pos[2] - 1, pos[2], false)[1] or ""
+  return { pos[2], math.max(1, math.min(pos[3], #line)) }
+end
+
+---A range from the two ends of a selection, in either order. Each end keeps its own
+---column: a block's corners are given to getregion() as they are, which turns them into
+---screen columns itself (byte columns differ between lines with tabs or multibyte text).
+---@param a integer[] `{ line, col }`
+---@param b integer[] `{ line, col }`
 ---@param mode "line"|"char"|"block"
 ---@return duet.Range
 local function region(a, b, mode)
@@ -162,33 +174,27 @@ local function region(a, b, mode)
     a, b = b, a
   end
   local range = { start_line = a[1], end_line = b[1], mode = mode }
-  if mode == "block" then
-    range.start_col, range.end_col = math.min(a[2], b[2]), math.max(a[2], b[2])
-  elseif mode == "char" then
+  if mode ~= "line" then
     range.start_col, range.end_col = a[2], b[2]
   end
   return range
 end
 
----The range for the command: the visual selection when it matches the range given (so a
----character-wise selection keeps its columns), else the lines given; or, with no range,
----the visual selection when the call comes from visual mode (a `<Cmd>` mapping, Lua).
+---The range for the command. An Ex range (`:'<,'>`, `:3,5`) is whole lines, as for any
+---Ex command: Vim can't tell a typed range from one made by a selection, so a selection's
+---columns would be a guess. Without one, a call from visual mode (a `<Cmd>` mapping, Lua)
+---uses the live selection, columns included.
+---@param buf integer
 ---@param opts duet.CaptureOpts
 ---@param mode string mode() when the call came
 ---@return duet.Range|nil
-local function command_range(opts, mode)
+local function command_range(buf, opts, mode)
   if (opts.range or 0) > 0 and opts.line1 and opts.line2 then
-    local vmode = VISUAL_MODES[vim.fn.visualmode()]
-    local first, last = vim.fn.getpos("'<"), vim.fn.getpos("'>")
-    if opts.range == 2 and vmode and vmode ~= "line" and first[2] == opts.line1 and last[2] == opts.line2 then
-      return region({ first[2], first[3] }, { last[2], last[3] }, vmode)
-    end
     return { start_line = math.min(opts.line1, opts.line2), end_line = math.max(opts.line1, opts.line2), mode = "line" }
   end
   local vmode = VISUAL_MODES[mode]
   if vmode then
-    local v, dot = vim.fn.getpos("v"), vim.fn.getpos(".")
-    return region({ v[2], v[3] }, { dot[2], dot[3] }, vmode)
+    return region(on_line(buf, vim.fn.getpos("v")), on_line(buf, vim.fn.getpos(".")), vmode)
   end
   return nil
 end
@@ -202,12 +208,11 @@ end
 function M.capture(opts)
   opts = opts or {}
   local mode = vim.fn.mode()
-  local current = opts.win or vim.api.nvim_get_current_win()
-  local win = code_window(current)
+  local win = code_window()
   local buf = vim.api.nvim_win_get_buf(win)
   local range
-  if win == current then
-    range = command_range(opts, mode)
+  if win == vim.api.nvim_get_current_win() then
+    range = command_range(buf, opts, mode)
   end
 
   local terminal = require("duet.terminal")
@@ -220,6 +225,7 @@ function M.capture(opts)
   else
     agent = require("duet.agents").get()
   end
+  -- The code window is in the current tab, so its number is enough for getcwd().
   local cwd = session and session.root or terminal.root(vim.fn.getcwd(vim.fn.win_id2win(win)))
   return {
     buf = buf,
@@ -229,6 +235,14 @@ function M.capture(opts)
     agent = agent or nil,
     range = range,
   }
+end
+
+---Leave visual mode, once its selection has been captured, as a `:` mapping would. Used
+---after capture() by commands and API calls that a `<Cmd>` or Lua mapping can run.
+function M.leave_visual()
+  if VISUAL_MODES[vim.fn.mode()] then
+    vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
+  end
 end
 
 -- Helpers for providers -----------------------------------------------------
@@ -322,7 +336,8 @@ end
 
 -- Rendering ------------------------------------------------------------------
 
----Run one provider. A provider that fails is logged and counts as having nothing.
+---Run one provider. A provider that throws or returns something malformed is logged, and
+---its error returned.
 ---@param name string
 ---@param ctx duet.Context
 ---@return duet.ContextResult|nil result nil when the provider has nothing to add
@@ -334,7 +349,7 @@ function M.get(name, ctx)
   end
   local ok, result = pcall(fn, ctx)
   if not ok then
-    local err = ("context: %s failed: %s"):format(name, result)
+    local err = ("context: {%s} failed: %s"):format(name, result)
     require("duet.log").error("%s", err)
     return nil, err
   end
@@ -342,7 +357,7 @@ function M.get(name, ctx)
     return nil
   end
   if type(result) ~= "table" or type(result.text) ~= "string" then
-    local err = ("context: %s returned %s, expected { text, data } or nil"):format(name, vim.inspect(result))
+    local err = ("context: {%s} returned %s, expected { text, data } or nil"):format(name, vim.inspect(result))
     require("duet.log").error("%s", err)
     return nil, err
   end
@@ -354,7 +369,8 @@ end
 
 ---Replace `{name}` placeholders in `template` with what the providers return. Only
 ---registered names are replaced: other braces (`{foo}`, code, JSON) are left as typed.
----Provider text is not expanded again. A provider with nothing renders as "", and a line
+---Provider text is not expanded again. A provider with nothing (or that failed, see
+---`info.errors`) renders as "", and a line
 ---that held a placeholder and is blank after rendering is dropped. Block results (code,
 ---lists) go on lines of their own, splitting the line around them.
 ---@param template string
@@ -362,7 +378,7 @@ end
 ---@return string text
 ---@return duet.RenderInfo info
 function M.render(template, ctx)
-  local info = { used = {}, empty = {} }
+  local info = { used = {}, empty = {}, errors = {} }
   ---@type table<string, duet.ContextResult|false>
   local cache = {}
   local function resolve(name)
@@ -370,7 +386,11 @@ function M.render(template, ctx)
       if not provider(name) then
         return nil
       end
-      cache[name] = M.get(name, ctx) or false
+      local result, err = M.get(name, ctx)
+      cache[name] = result or false
+      if err then
+        info.errors[name] = (err:gsub("^context: ", ""))
+      end
       info.used[#info.used + 1] = name
       if not cache[name] then
         info.empty[#info.empty + 1] = name
@@ -424,22 +444,36 @@ end
 
 ---Render text that is about to be sent. Fails when the text uses placeholders and all of
 ---them rendered empty: the text would lack what it was about (e.g. "Refactor {selection}"
----with no selection).
+---with no selection). Providers that failed are named first, with their error. When some
+---placeholders did render, the text is returned, and the failures as a warning.
 ---@param text string
 ---@param ctx duet.Context
 ---@return string|nil text
 ---@return string|nil err e.g. "nothing to send: {selection} is empty"
+---@return string|nil warning e.g. "{mine} failed: …", when the text is returned anyway
 function M.expand(text, ctx)
   local out, info = M.render(text, ctx)
-  if #info.used > 0 and #info.empty == #info.used then
-    local names = vim.tbl_map(function(name)
-      return "{" .. name .. "}"
-    end, info.empty)
-    local verb = #names == 1 and "is" or "are"
-    local hint = vim.tbl_contains(info.empty, "selection") and not ctx.range and " (no range or selection given)" or ""
-    return nil, ("nothing to send: %s %s empty%s"):format(table.concat(names, ", "), verb, hint)
+  local failures, empty = {}, {}
+  for _, name in ipairs(info.empty) do
+    if info.errors[name] then
+      failures[#failures + 1] = info.errors[name]
+    else
+      empty[#empty + 1] = "{" .. name .. "}"
+    end
   end
-  return out
+  if #info.used == 0 or #info.empty < #info.used then
+    return out, nil, #failures > 0 and table.concat(failures, "; ") or nil
+  end
+  local reasons = vim.deepcopy(failures)
+  if #empty > 0 then
+    local verb = #empty == 1 and "is" or "are"
+    local hint = ""
+    if vim.tbl_contains(info.empty, "selection") and not info.errors.selection and not ctx.range then
+      hint = " (no range or selection given; duet.send() sends text as typed)"
+    end
+    reasons[#reasons + 1] = ("%s %s empty%s"):format(table.concat(empty, ", "), verb, hint)
+  end
+  return nil, "nothing to send: " .. table.concat(reasons, "; ")
 end
 
 return M

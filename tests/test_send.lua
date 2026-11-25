@@ -588,9 +588,21 @@ end
 C["send expands a character-wise selection"] = function()
   fake()
   code()
+  child.lua([[vim.keymap.set("x", "<F5>", "<Cmd>Duet send What is {selection}?<CR>")]])
   child.api.nvim_win_set_cursor(0, { 3, 7 })
-  child.type_keys("v", "$", "h", ":", "Duet send What is {selection}?<CR>")
+  child.type_keys("v", "$", "h", "<F5>")
   local want = P .. "What is\na.lua:L3\n```lua\na + b\n```\n?" .. E .. "\r"
+  eq(wait_out(want), want)
+  eq(child.fn.mode(), "n")
+end
+
+C["send with a typed range sends whole lines, whatever was selected before"] = function()
+  fake()
+  code()
+  child.api.nvim_win_set_cursor(0, { 2, 6 })
+  child.type_keys("v", "j", "<Esc>")
+  child.cmd("2,3Duet send {selection}")
+  local want = P .. "a.lua:L2-L3\n```lua\nlocal b = 2\nreturn a + b\n```" .. E .. "\r"
   eq(wait_out(want), want)
 end
 
@@ -609,7 +621,30 @@ C["send refuses when every placeholder is empty"] = function()
   child.cmd("Duet send Refactor {selection}")
   eq(
     child.lua_get("_G.notes[1].msg"),
-    "[duet] send: nothing to send: {selection} is empty (no range or selection given)"
+    "[duet] send: nothing to send: {selection} is empty (no range or selection given; duet.send() sends text as typed)"
+  )
+  eq(child.lua_get("#require('duet.terminal').list()"), 0)
+end
+
+C["send warns about a failed provider and sends the rest"] = function()
+  fake()
+  code()
+  child.lua([[require("duet.context").register("broken", function() error("oops") end)]])
+  child.cmd("Duet send Review {file} {broken}")
+  eq(wait_out(P .. "Review a.lua " .. E .. "\r"), P .. "Review a.lua " .. E .. "\r")
+  local note = child.lua_get("_G.notes[1]")
+  eq(note.level, vim.log.levels.WARN)
+  eq(note.msg:match("^%[duet%] send: {broken} failed: .*oops$") ~= nil, true)
+end
+
+C["ask reports a failed provider"] = function()
+  fake(nil, { prompts = { mine = "Do {broken}" } })
+  code()
+  child.lua([[require("duet.context").register("broken", function() error("oops") end)]])
+  child.cmd("Duet ask mine")
+  eq(
+    child.lua_get("_G.notes[1].msg"):match("^%[duet%] ask: mine: nothing to send: {broken} failed: .*oops$") ~= nil,
+    true
   )
   eq(child.lua_get("#require('duet.terminal').list()"), 0)
 end
@@ -723,7 +758,10 @@ end
 C["duet.render() expands without sending"] = function()
   fake()
   code()
-  eq(child.lua_get("{ require('duet').render('{file} {foo}') }"), { "a.lua {foo}", { used = { "file" }, empty = {} } })
+  eq(
+    child.lua_get("{ require('duet').render('{file} {foo}') }"),
+    { "a.lua {foo}", { used = { "file" }, empty = {}, errors = vim.empty_dict() } }
+  )
   eq(child.lua_get("#require('duet.terminal').list()"), 0)
 end
 

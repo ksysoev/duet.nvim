@@ -44,9 +44,12 @@ function M.ask(name, opts)
     return nil, ("ask: unknown prompt '%s' (available: %s)"):format(name, available)
   end
   local context = require("duet.context")
-  local text, err = context.expand(template, opts.ctx or context.capture({ agent = opts.agent }))
+  local text, err, warning = context.expand(template, opts.ctx or context.capture({ agent = opts.agent }))
   if not text then
     return nil, ("ask: %s: %s"):format(name, err)
+  end
+  if warning then
+    require("duet.util").notify(("ask: %s: %s"):format(name, warning), vim.log.levels.WARN)
   end
   return require("duet.send").send(text, { submit = opts.submit, agent = opts.agent })
 end
@@ -77,7 +80,9 @@ function M.cmd_ask(args, opts)
   if #args > 1 then
     return nil, "ask: usage: :Duet ask [name]"
   end
-  local ctx = require("duet.context").capture(opts)
+  local context = require("duet.context")
+  local ctx = context.capture(opts)
+  context.leave_visual()
   local submit = not opts.bang
   if args[1] then
     return M.ask(args[1], { ctx = ctx, submit = submit })

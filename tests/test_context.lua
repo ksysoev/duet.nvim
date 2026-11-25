@@ -81,7 +81,15 @@ T["render()"]["cases"]["work"] = function(_, template, want, used, empty)
   local context = fakes()
   local text, info = context.render(template, {})
   eq(text, want)
-  eq(info, { used = used, empty = empty })
+  eq({ info.used, info.empty }, { used, empty })
+end
+
+T["render()"]["records why providers failed"] = function()
+  local _, info = fakes().render("{boom} {bad} {none} {word}", {})
+  eq(vim.tbl_keys(info.errors), vim.tbl_keys({ boom = true, bad = true }))
+  eq(info.errors.boom:match("^{boom} failed: .*broken$") ~= nil, true)
+  eq(info.errors.bad, '{bad} returned "text", expected { text, data } or nil')
+  eq(info.empty, { "boom", "bad", "none" })
 end
 
 T["render()"]["calls each provider once"] = function()
@@ -111,17 +119,32 @@ T["expand()"]["cases"] = MiniTest.new_set({
     { "all empty", "Refactor {none}", { err = "nothing to send: {none} is empty" } },
     { "several empty", "{none} {blank}", { err = "nothing to send: {none}, {blank} are empty" } },
     { "unknown only", "{foo}", { text = "{foo}" } },
+    {
+      "only a failed provider",
+      "Fix {bad}",
+      { err = 'nothing to send: {bad} returned "text", expected { text, data } or nil' },
+    },
+    {
+      "failures named before empty ones",
+      "{none} {bad}",
+      { err = 'nothing to send: {bad} returned "text", expected { text, data } or nil; {none} is empty' },
+    },
+    {
+      "a failure next to content is a warning",
+      "{word} {bad}",
+      { text = "WORD ", warning = '{bad} returned "text", expected { text, data } or nil' },
+    },
   },
 })
 
 T["expand()"]["cases"]["work"] = function(_, template, want)
-  local text, err = fakes().expand(template, {})
-  eq({ text = text, err = err }, want)
+  local text, err, warning = fakes().expand(template, {})
+  eq({ text = text, err = err, warning = warning }, want)
 end
 
 T["expand()"]["hints at a missing selection"] = function()
   local _, err = require("duet.context").expand("Refactor {selection}", { buf = 0 })
-  eq(err, "nothing to send: {selection} is empty (no range or selection given)")
+  eq(err, "nothing to send: {selection} is empty (no range or selection given; duet.send() sends text as typed)")
 end
 
 T["register()"] = MiniTest.new_set()
@@ -571,22 +594,48 @@ C["line-wise visual selection"] = function()
   eq(ctx().range, { start_line = 1, end_line = 2, mode = "line" })
 end
 
-C["character-wise visual selection keeps its columns"] = function()
+C["an Ex range from a character-wise selection is whole lines"] = function()
   child.api.nvim_win_set_cursor(0, { 1, 6 })
   child.type_keys("v", "j", "0", "e", ":", "Duet probe<CR>")
+  eq(ctx().range, { start_line = 1, end_line = 2, mode = "line" })
+end
+
+C["an old character-wise selection doesn't change a typed range"] = function()
+  child.api.nvim_win_set_cursor(0, { 1, 6 })
+  child.type_keys("v", "j", "<Esc>")
+  child.cmd("1,2Duet probe")
+  eq(ctx().range, { start_line = 1, end_line = 2, mode = "line" })
+end
+
+C["character-wise selection from a <Cmd> mapping keeps its columns"] = function()
+  child.api.nvim_win_set_cursor(0, { 1, 6 })
+  child.type_keys("v", "j", "0", "e", "<F2>")
   eq(ctx().range, { start_line = 1, end_line = 2, mode = "char", start_col = 7, end_col = 5 })
 end
 
-C["a typed range that differs from the last selection is line-wise"] = function()
-  child.type_keys("v", "l", "<Esc>")
-  child.cmd("2,3Duet probe")
-  eq(ctx().range, { start_line = 2, end_line = 3, mode = "line" })
+C["v$ ends on the last character"] = function()
+  child.api.nvim_win_set_cursor(0, { 1, 2 })
+  child.type_keys("v", "$", "<F2>")
+  -- "local abc = 1" is 13 bytes.
+  eq(ctx().range, { start_line = 1, end_line = 1, mode = "char", start_col = 3, end_col = 13 })
 end
 
-C["block-wise selection from a <Cmd> mapping"] = function()
+C["block-wise selection from a <Cmd> mapping keeps each corner's column"] = function()
   child.api.nvim_win_set_cursor(0, { 1, 8 })
   child.type_keys("<C-v>", "j", "h", "h", "<F2>")
-  eq(ctx().range, { start_line = 1, end_line = 2, mode = "block", start_col = 7, end_col = 9 })
+  eq(ctx().range, { start_line = 1, end_line = 2, mode = "block", start_col = 9, end_col = 7 })
+end
+
+C["block-wise selection over a tab gives what Vim yanks"] = function()
+  child.lua([[
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "abcdefghij", "\tXYZ" })
+    vim.bo.expandtab, vim.bo.tabstop = false, 8
+  ]])
+  child.api.nvim_win_set_cursor(0, { 1, 4 })
+  -- From "e" (screen column 5) down onto the tab on line 2 (screen columns 1-8).
+  child.type_keys("<C-v>", "j", "<F2>", '"zy')
+  local want = child.lua_get("vim.split(vim.fn.getreg('z'), '\\n')")
+  eq(child.lua_get("require('duet.context').get('selection', _G.ctx).data.text"), table.concat(want, "\n"))
 end
 
 C["selection made backwards, from Lua"] = function()

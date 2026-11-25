@@ -297,9 +297,12 @@ end
 ---@return boolean|nil
 ---@return string|nil err
 local function expand_and_send(text, ctx, submit)
-  local expanded, err = require("duet.context").expand(text, ctx)
+  local expanded, err, warning = require("duet.context").expand(text, ctx)
   if not expanded then
     return nil, "send: " .. err
+  end
+  if warning then
+    require("duet.util").notify("send: " .. warning, vim.log.levels.WARN)
   end
   return M.send(expanded, { submit = submit })
 end
@@ -316,7 +319,10 @@ function M.cmd_send(args, opts)
   if vim.trim(text) == "" then
     return nil, "send: usage: :Duet send <text>"
   end
-  return expand_and_send(text, require("duet.context").capture(opts), not opts.bang)
+  local context = require("duet.context")
+  local ctx = context.capture(opts)
+  context.leave_visual()
+  return expand_and_send(text, ctx, not opts.bang)
 end
 
 ---`:[range]Duet[!] prompt [text]`: ask for text with vim.ui.input (prefilled with
@@ -328,7 +334,9 @@ end
 function M.cmd_prompt(args, opts)
   opts = opts or {}
   local default = opts.rest or table.concat(args, " ")
-  local ctx = require("duet.context").capture(opts)
+  local context = require("duet.context")
+  local ctx = context.capture(opts)
+  context.leave_visual()
   vim.ui.input({ prompt = "duet> ", default = default }, function(input)
     if input == nil or vim.trim(input) == "" then
       return

@@ -272,7 +272,7 @@ review ~
     you had pasted it and pressed <Enter>. {text} is taken as typed,
     spaces included, except that placeholders such as `{file}` or
     `{selection}` are replaced with editor context (see |duet-context|);
-    [range] is the selection they use. With `!`, only paste it, so you can
+    [range] is the lines they use. With `!`, only paste it, so you can
     edit it in the agent before you submit it. Starts the agent if it is
     not running. See |duet-send|. >vim
         :'<,'>Duet send Refactor {selection}
@@ -358,8 +358,9 @@ require("duet").ask({name} [, {opts}])                            *duet.ask()*
 require("duet").render({template})                             *duet.render()*
     Replace the placeholders in {template} with the current context, as
     |:Duet-send| does, without sending anything. Returns the text and a
-    table with `used` (the placeholders found) and `empty` (those that had
-    nothing to add).
+    table with `used` (the placeholders found), `empty` (those that had
+    nothing to add, failed ones included) and `errors` (why a placeholder
+    failed, by name).
 
 require("duet.context").register({name}, {fn})     *duet.context.register()*
     Add a placeholder `{name}` (letters, digits and `_`), or replace one,
@@ -468,7 +469,9 @@ Fields:
                   (equal for one line). Without it, duet writes `path`,
                   `path:L10` or `path:L10-L20`. Claude Code's adapter
                   writes `@path`, `@path (line 10)` or
-                  `@path (lines 10-20)`, so Claude Code reads the file.
+                  `@path (lines 10-20)`, so Claude Code reads the file. A
+                  path with spaces is written without the `@`, since an
+                  `@` mention ends at the first space.
 - `health`        (optional) `fun(self)`: extra |vim.health| reports, such
                   as the version.
 
@@ -620,10 +623,13 @@ Paths are relative to the project root (|duet-terminal|), or absolute for
 files outside it. Lists are sorted with errors first and hold at most 200
 items, followed by "… and N more".
 
-The range is the one given to the command, `:'<,'>` from visual mode. A
-character-wise or block-wise selection keeps its columns when the range is
-the selection's. Run from the agent's terminal, the commands use the code
-window you were in before, without a range.
+A range given to the command (`:'<,'>`, `:3,5`) is whole lines, as for any
+Ex command: Vim can't tell a range made by a selection from one you typed.
+For the exact text of a character-wise or block-wise selection, run the
+command from visual mode with a `<Cmd>` mapping, or call |duet.ask()| from
+a mapping (see |duet-context-mappings|); visual mode ends afterwards. Run
+from the agent's terminal, the commands use the code window you were in
+before, without a range.
 
 How placeholders are replaced:
 - Only the names above (and those you add, |duet.context.register()|) are
@@ -634,6 +640,9 @@ How placeholders are replaced:
   diagnostics) becomes empty, and a line it leaves blank is dropped. If
   every placeholder in the text is empty, nothing is sent and duet says
   why.
+- A placeholder whose provider fails becomes empty too, and duet shows the
+  error: as the reason nothing was sent, or as a warning when the rest of
+  the text is sent.
 - Code blocks and lists go on lines of their own, so
   `Refactor {selection}` sends "Refactor" with the block below it.
 - Text that replaces a placeholder is not searched for placeholders.
@@ -642,13 +651,15 @@ How placeholders are replaced:
 A provider gets a context table: `buf`, `win`, `cursor` (`{ line, col }`,
 line 1-based, col 0-based), `cwd` (the project root), `agent` (the adapter)
 and `range` (`nil`, or `{ start_line, end_line, mode }` with `mode` one of
-`"line"`, `"char"` and `"block"`, plus `start_col` and `end_col`, 1-based,
-for the last two).
+`"line"`, `"char"` and `"block"`, plus `start_col` and `end_col` for the
+last two: 1-based byte columns of the selection's ends, on `start_line` and
+`end_line`. For a block they are its two corners, which getregion() turns
+into screen columns).
 
                                                        *duet-context-mappings*
 Mappings, for example: >lua
-    -- Visual mode: send the selection with a question you type.
-    vim.keymap.set("x", "<leader>as", ":Duet prompt {selection}<CR>")
+    -- Visual mode: send the exact selection with a question you type.
+    vim.keymap.set("x", "<leader>as", "<Cmd>Duet prompt {selection}<CR>")
     -- Explain the selection, or the cursor line in normal mode.
     vim.keymap.set({ "n", "x" }, "<leader>ae", function()
       require("duet").ask("explain")
