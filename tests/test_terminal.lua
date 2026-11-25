@@ -1251,6 +1251,54 @@ T["layout"]["restarting in a window of the user's does not make it a split"] = f
   eq(child.lua_get("vim.api.nvim_win_get_width(right) > 1"), true)
 end
 
+T["layout"]["a window the terminal left is not a split any more"] = function()
+  fake("fake", CAT)
+  -- open() focuses the panel, so :only leaves it as the tab's last window, and hiding the
+  -- session puts another buffer in it instead of closing it.
+  child.lua([[
+    local s = T.open()
+    _G.win, _G.buf = s:window(), s.buf
+    vim.cmd("only")
+    assert(s:hide())
+  ]])
+  eq(
+    child.lua_get([[{
+      valid = vim.api.nvim_win_is_valid(win),
+      layout = vim.w[win].duet_layout or false,
+      fix = vim.wo[win].winfixwidth,
+    }]]),
+    { valid = true, layout = false, fix = false }
+  )
+  child.lua("vim.cmd('vsplit')")
+  eq(child.lua_get("vim.w[win].duet_hand or false"), false)
+  -- Shown there again and restarted, it is not sized as a panel.
+  child.lua("vim.api.nvim_win_set_buf(win, buf); assert(T.restart())")
+  eq(child.lua_get("{ vim.w[win].duet_layout or false, vim.wo[win].winfixwidth }"), { false, false })
+  child.o.columns = 150
+  eq(child.lua_get("vim.api.nvim_win_get_width(win) ~= 80"), true)
+end
+
+T["layout"]["a panel showing another buffer is not tracked"] = function()
+  fake("fake", CAT)
+  child.lua("_G.win = T.open():window(); vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))")
+  -- A separate call, so WinResized sees the resize.
+  child.lua("vim.api.nvim_win_set_width(win, 50)")
+  eq(child.lua_get("vim.w[win].duet_hand or false"), false)
+end
+
+T["layout"]["a split in another tab follows editor resizes"] = function()
+  fake("fake", CAT)
+  child.lua("_G.win = T.open():window(); vim.cmd('tabnew')")
+  child.o.columns = 90
+  child.lua("vim.cmd('tabprevious')")
+  local shrunk = child.lua_get("{ vim.api.nvim_win_get_width(win), vim.w[win].duet_hand or false }")
+  child.lua("vim.cmd('tabnext')")
+  child.o.columns = 200
+  child.lua("vim.cmd('tabprevious')")
+  local grown = child.lua_get("{ vim.api.nvim_win_get_width(win), vim.w[win].duet_hand or false }")
+  eq({ shrunk, grown }, { { 69, false }, { 80, false } })
+end
+
 T["layout"]["a hand size gives way to a size set with setup()"] = MiniTest.new_set({
   parametrize = { { "from a fraction", 0.5 }, { "from an absolute size", 80 } },
 })

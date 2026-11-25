@@ -142,9 +142,10 @@ terminal ~
         An absolute size is capped so the rest of the editor keeps
         `min_code_width` columns (`min_code_height` lines for `"bottom"`),
         plus the separator. On an 80-column editor the default panel is 59
-        columns wide and the code gets 20. When the editor is too small for
-        both, the split and the rest share it evenly: on a 20-column editor
-        the panel gets 9 columns and the code 10. Fractional sizes are not
+        columns wide and the code gets 20. On an editor narrower than twice
+        the minimum plus one (41 columns with the defaults), the split never
+        gets less than the rest: they share it evenly, so a 30-column editor
+        gives the panel 14 columns and the code 15. Fractional sizes are not
         capped.
 
         The cap is applied when the split opens and when the editor is

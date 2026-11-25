@@ -274,11 +274,10 @@ local function apply_window_options(win, layout)
   wo.cursorline = false
   wo.colorcolumn = ""
   wo.statuscolumn = ""
-  if layout == "bottom" then
-    wo.winfixheight = true
-  elseif layout == "right" or layout == "left" then
-    wo.winfixwidth = true
-  end
+  -- Turn the fixed sizes off elsewhere: a buffer put in a window takes over the window's
+  -- local values, so one a split had would otherwise stay with a window of the user's.
+  wo.winfixheight = layout == "bottom"
+  wo.winfixwidth = layout == "right" or layout == "left"
   vim.w[win].duet_layout = layout
 end
 
@@ -381,11 +380,12 @@ end
 ---On WinResized: a split whose size changed since duet last recorded it was resized by
 ---the user (or by something else outside an editor resize), so that size becomes the one
 ---the split keeps and grows back to, in `w:duet_hand`. `w:duet_hand_for` records the size
----option it was made under.
+---option it was made under. Only windows that show a duet terminal count: a panel the user
+---put another buffer in (e.g. with :edit) is not tracked.
 local function on_win_resized()
   for _, win in ipairs(vim.v.event.windows or {}) do
     local axis = vim.api.nvim_win_is_valid(win) and split_axis(win)
-    if axis and not is_float(win) then
+    if axis and not is_float(win) and vim.b[vim.api.nvim_win_get_buf(win)].duet_session then
       local size = get_size(win, axis)
       if size ~= vim.w[win].duet_size then
         vim.w[win].duet_hand = size
@@ -470,6 +470,21 @@ local function empty_buffer(except)
   return vim.api.nvim_create_buf(true, false)
 end
 
+---Drop the split state duet keeps on a window (see `record_size()` and `on_win_resized()`),
+---once its terminal has left it, so the window is not sized as a split later. The buffer
+---now in the window took over the split's 'winfixwidth' or 'winfixheight', so turn it off.
+---@param win integer
+local function forget_window(win)
+  if split_axis(win) then
+    vim.wo[win][0].winfixwidth = false
+    vim.wo[win][0].winfixheight = false
+  end
+  vim.w[win].duet_layout = nil
+  vim.w[win].duet_size = nil
+  vim.w[win].duet_hand = nil
+  vim.w[win].duet_hand_for = nil
+end
+
 ---Take `buf` out of `win`: close the window, or, when it is the last window of its tab
 ---and can't be closed, show the alternate buffer (or a new empty one) in it.
 ---@param win integer
@@ -486,7 +501,11 @@ local function close_window(win, buf)
   if alt <= 0 or alt == buf or not vim.bo[alt].buflisted then
     alt = empty_buffer(buf)
   end
-  return pcall(vim.api.nvim_win_set_buf, win, alt)
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, alt)
+  if ok then
+    forget_window(win)
+  end
+  return ok, err
 end
 
 ---Close every window that shows the session's buffer (see close_window). Wiping a buffer
