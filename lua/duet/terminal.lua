@@ -1151,12 +1151,24 @@ end
 ---@param n integer
 ---@return string[]
 local function last_lines(buf, n)
-  local count = vim.api.nvim_buf_line_count(buf)
-  local lines = vim.api.nvim_buf_get_lines(buf, math.max(0, count - n * 4), -1, false)
-  while #lines > 0 and vim.trim(lines[#lines]) == "" do
-    lines[#lines] = nil
+  -- Find the last non-blank line, reading back a block at a time: a tall terminal can
+  -- have many blank rows below the output.
+  local last = vim.api.nvim_buf_line_count(buf)
+  local block = 100
+  while last > 0 do
+    local first = math.max(0, last - block)
+    local lines = vim.api.nvim_buf_get_lines(buf, first, last, false)
+    local i = #lines
+    while i > 0 and vim.trim(lines[i]) == "" do
+      i = i - 1
+    end
+    if i > 0 then
+      last = first + i
+      break
+    end
+    last = first
   end
-  return vim.list_slice(lines, math.max(1, #lines - n + 1))
+  return vim.api.nvim_buf_get_lines(buf, math.max(0, last - n), last, false)
 end
 
 ---Whether the agent's TUI accepts input now, as the adapter's `is_ready` tells from the
@@ -1197,7 +1209,11 @@ function Session:when_ready(timeout_ms, cb)
     cb(err)
     return
   end
-  local timer = assert(vim.uv.new_timer())
+  local timer, timer_err = vim.uv.new_timer()
+  if not timer then
+    cb(("terminal: cannot start a timer: %s"):format(tostring(timer_err)))
+    return
+  end
   local deadline = vim.uv.now() + timeout_ms
   local done = false
   local function finish(finish_err, timed_out)

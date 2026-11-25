@@ -125,15 +125,36 @@ local function is_rule(line)
   return body ~= "" and body:gsub("─", "") == ""
 end
 
----Whether the TUI shows its input prompt: a `❯` line right below a horizontal rule.
----Menus (such as the folder trust dialog) also use `❯`, but inside a box and before a
----numbered choice, so they don't match.
+-- A no-break space (U+00A0): Claude Code puts one after the shell-mode `!`.
+local NBSP = "\194\160"
+
+---Whether `line` is the first line of the input box: `❯` (or `!` in shell mode) in the
+---first column. A `❯` before a number is a menu choice.
+---@param line string
+---@return boolean
+local function is_prompt(line)
+  if line:match("^❯") then
+    return not line:match("^❯%s*%d+%.")
+  end
+  return line == "!" or line:match("^!%s") ~= nil or vim.startswith(line, "!" .. NBSP)
+end
+
+---Whether the TUI shows its input prompt: a prompt line (see is_prompt) right below a
+---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
+---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
+---screen counts: an older frame left in the scrollback above a dialog doesn't.
 ---@param lines string[] terminal buffer lines
 ---@return boolean
 function M:is_ready(lines)
-  for i = 2, #lines do
-    local prev, line = lines[i - 1], lines[i]
-    if line:match("^❯") and not line:match("^❯%s*%d+%.") and is_rule(prev) then
+  local last = 1
+  for i = #lines, 1, -1 do
+    if lines[i]:find("❯", 1, true) then
+      last = i
+      break
+    end
+  end
+  for i = math.max(2, last), #lines do
+    if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
       return true
     end
   end

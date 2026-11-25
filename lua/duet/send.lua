@@ -16,8 +16,9 @@ M.SUBMIT = "\r"
 -- Bytes per nvim_chan_send call.
 M.CHUNK_SIZE = 4096
 -- How long the agent may look not ready when Enter is due before duet takes it for a
--- dialog: a redraw can leave the input box off screen for a moment.
-M.SUBMIT_GRACE_MS = 500
+-- dialog: a redraw, e.g. after a large paste, can leave the input box off screen for a
+-- while. A real dialog only makes the send fail later.
+M.SUBMIT_GRACE_MS = 2000
 
 ---@class duet.SendOpts
 ---@field submit? boolean press Enter after the paste (default: true)
@@ -84,12 +85,17 @@ function M.chunks(data, size)
   return list
 end
 
----The writes for one paste: the start marker, the text in chunks, then the end marker.
----The markers go on their own, so a chunk boundary never splits one: an agent could read
----the ESC of a split marker as the Escape key. Pure.
+---The writes for one paste. A paste that fits in a chunk is one write, so nothing the
+---user types can land inside it. A longer one is the start marker, the text in chunks,
+---then the end marker: the markers go on their own, so a chunk boundary never splits one
+---(an agent could read the ESC of a split marker as the Escape key). Pure.
 ---@param text string sanitized text
 ---@return string[]
 function M.writes(text)
+  local whole = M.payload(text)
+  if #whole <= M.CHUNK_SIZE then
+    return { whole }
+  end
   local list = { M.PASTE_START }
   vim.list_extend(list, M.chunks(text, M.CHUNK_SIZE))
   list[#list + 1] = M.PASTE_END

@@ -493,7 +493,12 @@ become newlines.
 
 Long text is written in chunks, one per event loop turn, so Neovim stays
 responsive. Texts sent to the same agent arrive in the order they were
-sent, each one whole.
+sent, each one whole. Don't type in the agent's terminal while a send is
+running: your keys could end up in the text, or be submitted with it.
+
+The text is typed as it is, so the agent reads it as if you had typed it:
+for Claude Code, text starting with `/` runs that command, and text
+starting with `!` runs in its shell mode.
 
 Each send waits until the agent is ready for input: its input prompt is on
 screen, not a dialog (see |duet-config-send-ready_timeout_ms|). Text never

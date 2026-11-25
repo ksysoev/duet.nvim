@@ -36,15 +36,24 @@ end
 
 T["writes()"] = MiniTest.new_set()
 
-T["writes()"]["puts the markers on their own"] = function()
-  eq(require("duet.send").writes("a\nb"), { P, "a\nb", E })
+T["writes()"]["writes a short paste at once"] = function()
+  eq(require("duet.send").writes("a\nb"), { P .. "a\nb" .. E })
+end
+
+T["writes()"]["writes a paste of exactly a chunk at once"] = function()
+  local text = string.rep("x", 4096 - #P - #E)
+  eq(require("duet.send").writes(text), { P .. text .. E })
+end
+
+T["writes()"]["puts the markers on their own in a longer paste"] = function()
+  local text = string.rep("x", 4096 - #P - #E + 1)
+  eq(require("duet.send").writes(text), { P, text, E })
 end
 
 T["writes()"]["never splits the end marker at a chunk boundary"] = function()
   -- In one payload, this length put the end marker's ESC at byte 4096.
   local text = string.rep("x", 4096 - #P - 1)
-  local writes = require("duet.send").writes(text)
-  eq(writes, { P, text, E })
+  eq(require("duet.send").writes(text), { P, text, E })
   eq(require("duet.send").writes(string.rep("y", 4097)), { P, string.rep("y", 4096), "y", E })
 end
 
@@ -293,8 +302,8 @@ S["does not wait for an agent without is_ready"] = function()
     })
   ]])
   child.lua("_G.send('now')")
-  child.lua("vim.wait(1000, function() return #_G.writes >= 2 end, 5)")
-  eq(child.lua_get("{ _G.writes[1], _G.writes[2] }"), { P, "now" })
+  child.lua("vim.wait(1000, function() return #_G.writes >= 1 end, 5)")
+  eq(child.lua_get("_G.writes[1]"), P .. "now" .. E)
 end
 
 S["waits while the agent is asking something"] = function()
@@ -326,7 +335,7 @@ S["pastes without submitting when a dialog opens before Enter"] = function()
     _G.send("y")
     -- Open the dialog once the paste is written, during the submit delay, with the
     -- terminal hidden.
-    vim.wait(3000, function() return _G.writes[#_G.writes] == E end, 5)
+    vim.wait(3000, function() return vim.endswith(_G.writes[#_G.writes] or "", E) end, 5)
     _G.dialog = true
     require("duet.terminal").list()[1]:hide()
   ]])
@@ -343,7 +352,7 @@ S["submits when the agent looks busy only for a moment before Enter"] = function
   fake(nil, { send = { submit_delay_ms = 50 } })
   child.lua([[
     _G.send("x")
-    vim.wait(3000, function() return _G.writes[#_G.writes] == E end, 5)
+    vim.wait(3000, function() return vim.endswith(_G.writes[#_G.writes] or "", E) end, 5)
     -- A redraw: the input box is off screen for less than the grace period.
     _G.dialog = true
     vim.defer_fn(function() _G.dialog = false end, 200)
@@ -444,6 +453,15 @@ S["reports a failure to show an exit not seen yet"] = function()
     { vim.NIL, "terminal: fake exited: see its terminal, then try again" }
   )
   eq(child.lua_get("{ _G.first:is_visible(), _G.first.exit_seen }"), { true, true })
+end
+
+S["finds the prompt above many blank lines"] = function()
+  -- READY, then 300 blank rows, as on a very tall terminal.
+  fake(
+    [[stty raw -echo; printf 'READY\r\n'; i=0; while [ $i -lt 300 ]; do printf '\r\n'; i=$((i+1)); done; exec cat > "$OUT"]]
+  )
+  child.lua("_G.send('tall')")
+  eq(wait_out(P .. "tall" .. E .. "\r"), P .. "tall" .. E .. "\r")
 end
 
 S["focuses the terminal with focus = true"] = function()

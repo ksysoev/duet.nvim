@@ -238,6 +238,63 @@ local ready_cases = {
     ready = false,
   },
   {
+    -- Captured: Claude Code 2.1.330 puts a no-break space after the `!`.
+    name = "shell mode: the prompt is ! and a no-break space",
+    lines = {
+      "❯ an earlier message",
+      "⏺ an answer",
+      string.rep("─", 80),
+      "!\194\160echo duet-ok",
+      string.rep("─", 80),
+      "  ! for shell mode",
+    },
+    ready = true,
+  },
+  {
+    name = "shell mode: the prompt is ! and a space",
+    lines = {
+      "❯ an earlier message",
+      "⏺ an answer",
+      string.rep("─", 80),
+      "! echo hi",
+      string.rep("─", 80),
+      "  ! for shell mode",
+    },
+    ready = true,
+  },
+  {
+    name = "shell mode with nothing typed",
+    lines = { string.rep("─", 80), "!", string.rep("─", 80) },
+    ready = true,
+  },
+  { name = "a ! that isn't a prompt", lines = { string.rep("─", 80), "!important" }, ready = false },
+  {
+    name = "an old input box above a permission dialog",
+    lines = {
+      string.rep("─", 80),
+      "❯ ",
+      string.rep("─", 80),
+      "⏺ Bash(touch created.txt)",
+      string.rep("─", 80),
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    },
+    ready = false,
+  },
+  {
+    name = "an old shell prompt above a permission dialog",
+    lines = {
+      string.rep("─", 80),
+      "! ls",
+      string.rep("─", 80),
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    },
+    ready = false,
+  },
+  {
     name = "the trust dialog, without a box or numbers",
     lines = {
       string.rep("─", 80),
