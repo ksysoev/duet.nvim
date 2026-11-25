@@ -136,6 +136,8 @@ T["validation error"] = MiniTest.new_set({
     { "close_on_exit unknown", { terminal = { close_on_exit = "yes" } }, "^terminal.close_on_exit: expected" },
     { "close_on_exit as a boolean", { terminal = { close_on_exit = true } }, "^terminal.close_on_exit: expected" },
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
+    { "negative submit delay", { send = { submit_delay_ms = -1 } }, "^send.submit_delay_ms: expected" },
+    { "fractional ready timeout", { send = { ready_timeout_ms = 1.5 } }, "^send.ready_timeout_ms: expected" },
     {
       "key action under a dotted lhs",
       { terminal = { keys = { ["<M-.>"] = "hid" } } },

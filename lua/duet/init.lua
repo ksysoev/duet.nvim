@@ -37,4 +37,14 @@ function M.close(opts)
   return require("duet.terminal").close(opts)
 end
 
+---Send text to the agent as one paste, and submit it unless `opts.submit` is false.
+---Starts the agent if needed. Returns once the text is queued. See |duet.send()|.
+---@param text string
+---@param opts? duet.SendOpts
+---@return boolean|nil ok
+---@return string|nil err
+function M.send(text, opts)
+  return require("duet.send").send(text, opts)
+end
+
 return M

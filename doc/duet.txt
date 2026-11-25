@@ -12,6 +12,7 @@ CONTENTS                                                       *duet-contents*
   7. Lua API ................................................. |duet-api|
   8. Agents .................................................. |duet-agents|
   9. Terminal ................................................ |duet-terminal|
+  10. Sending text ........................................... |duet-send|
 
 ==============================================================================
 1. INTRODUCTION                                     *duet* *duet-introduction*
@@ -58,6 +59,7 @@ Defaults: >lua
         auto_insert = true,
         keys = { ["<C-q>"] = "normal_mode" },
       },
+      send = { submit_delay_ms = 100, ready_timeout_ms = 10000 },
       review = {},
     }
 <
@@ -194,6 +196,23 @@ terminal ~
         - `"hide"`: hide the terminal (terminal and normal mode).
         - `false`: no mapping, e.g. to turn off a default.
 
+                                                            *duet-config-send*
+send ~
+    `table`
+    How text is sent to the agent. See |duet-send|.
+                                            *duet-config-send-submit_delay_ms*
+    submit_delay_ms ~
+        `integer` (default: `100`)
+        Milliseconds to wait after the end of a paste before pressing
+        <Enter>, so the agent has taken the paste in. Raise it if long
+        pastes are left in the agent's input without being submitted.
+                                           *duet-config-send-ready_timeout_ms*
+    ready_timeout_ms ~
+        `integer` (default: `10000`)
+        How long, in milliseconds, a send waits for the agent to be ready
+        for input: started, with its input prompt on screen rather than a
+        dialog. After that the send fails. See |duet-send|.
+
                                                           *duet-config-review*
 review ~
     `table` (default: `{}`)
@@ -229,6 +248,19 @@ review ~
     Stop the agent and start it again, in the same window if it is shown.
     Starts it if it is not running.
 
+:Duet send {text}                                                 *:Duet-send*
+:Duet! send {text}
+    Send {text} to the agent of the current project and submit it, as if
+    you had pasted it and pressed <Enter>. {text} is taken as typed,
+    spaces included. With `!`, only paste it, so you can edit it in the
+    agent before you submit it. Starts the agent if it is not running. See
+    |duet-send|.
+
+:Duet prompt [{text}]                                           *:Duet-prompt*
+:Duet! prompt [{text}]
+    Ask for a prompt with |vim.ui.input()|, prefilled with {text}, and send
+    it like |:Duet-send|. Cancelling, or an empty prompt, sends nothing.
+
 ==============================================================================
 5. HEALTH                                                        *duet-health*
 
@@ -263,6 +295,25 @@ require("duet").close([{opts}])                                *duet.close()*
     Same as |:Duet-toggle|, |:Duet-open| and |:Duet-close|. {opts} may set
     `stop = true` (like `:Duet! close`) and `agent`. `toggle` and `open`
     return the session, or `nil` and an error message.
+
+require("duet").send({text} [, {opts}])                          *duet.send()*
+    Send {text} to the agent as one paste and submit it. See |duet-send|.
+    {opts} is a table with:
+    - `submit`   `boolean` (default: `true`): press <Enter> after the
+                 paste. `false` only pastes.
+    - `focus`    `boolean` (default: `false`): move the cursor into the
+                 agent's terminal.
+    - `agent`    `string`: the agent to send to (default: the current
+                 session's agent, else |duet-config-agent|).
+    - `session`  a session (see |duet.terminal.current()|) to send to
+                 instead. It must be running.
+    - `on_done`  `fun(err?: string)`: called once the text has been
+                 written to the agent, or with an error message if it
+                 could not be. Without it, such errors are shown.
+    Returns `true` once the text is queued, or `nil` and an error message
+    (for example for empty text, or when the agent cannot start); `on_done`
+    is not called then. `on_done` is always called after `send()` has
+    returned.
 
 require("duet.config").get()                              *duet.config.get()*
     Return the current configuration (treat it as read-only).
@@ -337,7 +388,11 @@ Fields:
                   no processes started. `self.cmd`, `self.args` and
                   `self.env` already include the user's overrides.
 - `is_ready`      (optional) `fun(self, lines): boolean`: whether the
-                  agent's terminal (given as its lines) accepts input.
+                  agent's terminal (given as its last lines) accepts input:
+                  `false` while the agent starts up or shows a dialog, such
+                  as a permission prompt. Without it, duet sends text as
+                  soon as the agent runs and can't tell when it is asking
+                  something, so define it for any agent with a TUI.
 - `format_ref`    (optional) `fun(self, path, range?): string`: how to
                   refer to a file in a prompt.
 - `health`        (optional) `fun(self)`: extra |vim.health| reports, such
@@ -403,5 +458,66 @@ require("duet.terminal").get({id})                      *duet.terminal.get()*
 
 require("duet.terminal").list()                        *duet.terminal.list()*
     Return all sessions, most recently used first.
+
+require("duet.terminal").ensure([{agent}] [, {opts}]) *duet.terminal.ensure()*
+    Return the running session for the current project, starting the agent
+    if there is none and restarting it if it has exited, or `nil` and an
+    error message. The cursor does not move. With `{ show = true }`, a
+    session this call starts is shown. As with |:Duet-open|, an agent that
+    exited while you were not looking is not restarted: its terminal is
+    shown, so you can read its output, and an error is returned; the next
+    call restarts it.
+
+                                                     *duet-session-when_ready*
+session:when_ready({timeout_ms}, {cb})
+    Call {cb} once the agent accepts input, as its adapter's `is_ready`
+    tells from the terminal's last lines (an adapter without `is_ready` is
+    ready whenever the agent runs). Checked afresh on every call, so a
+    dialog the agent shows makes it wait. {cb} gets an error message if the
+    agent is not ready after {timeout_ms} milliseconds, or exits or is
+    stopped first. `session:is_ready()` answers the same question now.
+
+==============================================================================
+10. SENDING TEXT                                                   *duet-send*
+
+|:Duet-send|, |:Duet-prompt| and |duet.send()| type text into the agent's
+terminal. Agents take a newline as "submit", so duet writes the text as one
+bracketed paste (`ESC [200~` ... `ESC [201~`) and then presses <Enter>
+after |duet-config-send-submit_delay_ms|. Multi-line text arrives as one
+message and is submitted once.
+
+Before sending, duet removes control characters that could break the
+agent's input or end the paste early: every control character except
+newline and tab (escape included), DEL and the C1 controls. Line endings
+become newlines.
+
+Long text is written in chunks, one per event loop turn, so Neovim stays
+responsive. Texts sent to the same agent arrive in the order they were
+sent, each one whole. Don't type in the agent's terminal while a send is
+running: your keys could end up in the text, or be submitted with it.
+
+The text is typed as it is, so the agent reads it as if you had typed it:
+for Claude Code, text starting with `/` runs that command, and text
+starting with `!` runs in its shell mode.
+
+Each send waits until the agent is ready for input: its input prompt is on
+screen, not a dialog (see |duet-config-send-ready_timeout_ms|). Text never
+goes into a dialog, such as a permission prompt, where <Enter> would answer
+it. If the agent's terminal is hidden while it asks something, duet shows
+it, without moving the cursor.
+
+If a dialog opens after the paste but before <Enter>, the text is left in
+the agent's input without being submitted, and duet tells you and shows the
+terminal. Texts sent after it and still waiting are dropped: pasted after
+it, they would be submitted together with it. duet waits a moment before it
+decides a dialog opened, since the input prompt can leave the screen
+briefly while the agent redraws.
+
+If the agent is not running, duet starts it and shows its terminal without
+moving the cursor. A first start in a new folder may ask you something
+first, such as whether you trust the folder: answer it in the terminal,
+then send again if the send timed out. If the agent exited while its
+terminal was hidden, duet shows that terminal instead of restarting the
+agent, so its last output isn't lost; send again to restart it.
 
  vim:tw=78:ts=8:noet:ft=help:norl:

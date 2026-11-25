@@ -28,6 +28,12 @@ T["helptags build without errors"] = function()
     "duet-config-terminal-layout",
     "duet-config-terminal-split",
     "duet.terminal.current()",
+    "duet-send",
+    ":Duet-send",
+    ":Duet-prompt",
+    "duet.send()",
+    "duet-config-send",
+    "duet.terminal.ensure()",
   }) do
     eq({ tag, vim.tbl_contains(names, tag) }, { tag, true })
   end

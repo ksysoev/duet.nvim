@@ -17,6 +17,8 @@ local M = {}
 ---@field exit_seen boolean the terminal has been shown since the job exited
 ---@field last_used integer order of last use, higher is more recent
 ---@field stopping boolean the job is being stopped by duet, so its exit is expected
+---@field stopped boolean duet stopped the agent while it ran (stop, restart, wiping the buffer)
+---@field seen_ready boolean the agent's TUI has been ready for input at least once
 local Session = {}
 Session.__index = Session
 M.Session = Session
@@ -32,6 +34,12 @@ local augroup
 local enlarging = false
 
 local FILETYPE = "duet_terminal"
+-- Readiness polling (Session:when_ready): how often, and how many of the terminal's last
+-- non-blank lines the adapter's is_ready sees. Few lines fail safe: missing an input box
+-- only makes a send wait, but an old one in the scrollback could pass for ready while a
+-- dialog is open. Claude Code shows a multi-line paste as one line, so its box stays short.
+local READY_POLL_MS = 50
+local READY_LINES = 50
 
 local function config()
   return require("duet.config").get().terminal
@@ -542,6 +550,7 @@ local function release(self)
   self.stopping = true
   sessions[self.id] = nil
   if self.job then
+    self.stopped = true
     pcall(vim.fn.jobstop, self.job)
   end
   remove_run_dir(self.run_dir)
@@ -1061,6 +1070,8 @@ function Session.new(agent, opts)
     run_dir = run_dir,
     buf = vim.api.nvim_create_buf(false, false),
     stopping = false,
+    stopped = false,
+    seen_ready = false,
     exit_seen = false,
     last_used = next_use(),
   }, Session)
@@ -1132,6 +1143,109 @@ end
 ---@return boolean
 function Session:is_visible()
   return self:window() ~= nil
+end
+
+---The terminal's last `n` lines, trailing blank lines left out. A TUI that renders inline
+---leaves the rows below its output blank.
+---@param buf integer
+---@param n integer
+---@return string[]
+local function last_lines(buf, n)
+  -- Find the last non-blank line, reading back a block at a time: a tall terminal can
+  -- have many blank rows below the output.
+  local last = vim.api.nvim_buf_line_count(buf)
+  local block = 100
+  while last > 0 do
+    local first = math.max(0, last - block)
+    local lines = vim.api.nvim_buf_get_lines(buf, first, last, false)
+    local i = #lines
+    while i > 0 and vim.trim(lines[i]) == "" do
+      i = i - 1
+    end
+    if i > 0 then
+      last = first + i
+      break
+    end
+    last = first
+  end
+  return vim.api.nvim_buf_get_lines(buf, math.max(0, last - n), last, false)
+end
+
+---Whether the agent's TUI accepts input now, as the adapter's `is_ready` tells from the
+---terminal's last lines: false while it starts up or shows a dialog. An agent without
+---`is_ready` is ready whenever it runs.
+---@return boolean|nil ready
+---@return string|nil err the agent is gone, or the adapter's is_ready failed
+function Session:is_ready()
+  if sessions[self.id] ~= self or not self.job or not vim.api.nvim_buf_is_valid(self.buf) then
+    local name = self.agent.name
+    if self.stopped then
+      return nil, ("terminal: %s was stopped"):format(name)
+    elseif self.seen_ready then
+      return nil, ("terminal: %s exited"):format(name)
+    end
+    return nil, ("terminal: %s exited before it was ready for input"):format(name)
+  end
+  local ready = true
+  if self.agent.is_ready then
+    local ok, result = pcall(self.agent.is_ready, self.agent, last_lines(self.buf, READY_LINES))
+    if not ok then
+      return nil, ("terminal: %s is_ready failed: %s"):format(self.agent.name, result)
+    end
+    ready = result == true
+  end
+  self.seen_ready = self.seen_ready or ready
+  return ready
+end
+
+---Call `cb` once the agent's TUI accepts input (see Session:is_ready). Polls without
+---blocking; `cb` gets an error after `timeout_ms` (with `timed_out` set), or if the job
+---exits or is stopped first.
+---@param timeout_ms integer
+---@param cb fun(err?: string, timed_out?: boolean)
+function Session:when_ready(timeout_ms, cb)
+  local ready, err = self:is_ready()
+  if ready or err then
+    cb(err)
+    return
+  end
+  local timer, timer_err = vim.uv.new_timer()
+  if not timer then
+    cb(("terminal: cannot start a timer: %s"):format(tostring(timer_err)))
+    return
+  end
+  local deadline = vim.uv.now() + timeout_ms
+  local done = false
+  local function finish(finish_err, timed_out)
+    if done then
+      return
+    end
+    done = true
+    timer:stop()
+    timer:close()
+    cb(finish_err, timed_out)
+  end
+  timer:start(
+    READY_POLL_MS,
+    READY_POLL_MS,
+    vim.schedule_wrap(function()
+      if done then
+        return
+      end
+      local now_ready, check_err = self:is_ready()
+      if now_ready or check_err then
+        finish(check_err)
+      elseif vim.uv.now() >= deadline then
+        finish(
+          ("terminal: %s is not ready for input after %d ms (answer its prompt in the terminal, then try again)"):format(
+            self.agent.name,
+            timeout_ms
+          ),
+          true
+        )
+      end
+    end)
+  )
 end
 
 ---Show the session in the current tab, hiding any other duet session there. Focus does not move.
@@ -1325,6 +1439,48 @@ function M.open(name)
   local win, focus_err = session:focus()
   if not win then
     return nil, focus_err
+  end
+  return session
+end
+
+---The agent's running session for the current root, started if there is none, or restarted
+---if its agent has exited. Focus does not move. As with M.open, an exited session whose
+---terminal has not been seen since the exit is not restarted: it is shown, so the agent's
+---last output can be read, and an error is returned.
+---@param name? string agent name (default: the current session's agent, else the `agent` option)
+---@param opts? { show?: boolean } show the session if this call starts it (default: false)
+---@return duet.Session|nil
+---@return string|nil err
+function M.ensure(name, opts)
+  opts = opts or {}
+  local session, err = target(name), nil
+  if session and session:is_running() then
+    return session
+  end
+  if session and not session.exit_seen then
+    local win, show_err = session:show()
+    if not win then
+      return nil, show_err
+    end
+    return nil, ("terminal: %s exited: see its terminal, then try again"):format(session.agent.name)
+  end
+  if session then
+    session, err = session:restart()
+  else
+    local agent
+    agent, err = require("duet.agents").get(name)
+    if agent then
+      session, err = Session.new(agent, { hidden = not opts.show })
+    end
+  end
+  if not session then
+    return nil, err
+  end
+  if opts.show then
+    local win, show_err = session:show()
+    if not win then
+      return nil, show_err
+    end
   end
   return session
 end
