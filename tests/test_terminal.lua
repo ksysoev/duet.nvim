@@ -1404,6 +1404,100 @@ T["layout"]["a float stays below the tabline"] = function()
   eq(row, 1)
 end
 
+T["layout"]["a float moves below a tabline that appears"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "float", float = { width = 1, height = 1, border = "none" } } })
+  child.lua("_G.win = T.open():window()")
+  local before = child.lua_get("vim.api.nvim_win_get_position(win)[1]")
+  child.lua("vim.cmd('tabnew')")
+  child.lua("vim.cmd('tabprevious')")
+  eq({ before, child.lua_get("vim.api.nvim_win_get_position(win)[1]") }, { 0, 1 })
+end
+
+T["layout"]["switching sessions gives the new split its full size"] = function()
+  fake("one", CAT)
+  fake("two", CAT)
+  child.o.columns = 120
+  -- The new split opens beside the old one, so it gets only what 'winminwidth' leaves.
+  child.lua("vim.o.winwidth = 30; vim.o.winminwidth = 30")
+  child.lua("_G.code = vim.api.nvim_get_current_win(); assert(T.open('one'))")
+  child.lua("_G.win = assert(T.open('two')):window()")
+  local function sizes()
+    return child.lua_get([[{
+      panel = vim.api.nvim_win_get_width(win),
+      code = vim.api.nvim_win_get_width(code),
+      hand = vim.w[win].duet_hand or false,
+    }]])
+  end
+  eq(sizes(), { panel = 80, code = 39, hand = false })
+  child.lua("vim.cmd('doautocmd VimResized')")
+  eq(sizes(), { panel = 80, code = 39, hand = false })
+end
+
+-- Changes that take lines from the windows without resizing the editor: { name, change, undo }.
+-- Each runs in its own call, so WinResized sees what it did. `laststatus` starts at 0.
+local LINES_TAKEN = {
+  { "a tab page", { "vim.cmd('tabnew')", "vim.cmd('tabprevious')" }, { "vim.cmd('tabnext')", "vim.cmd('tabclose')" } },
+  { "showtabline", { "vim.o.showtabline = 2" }, { "vim.o.showtabline = 1" } },
+  { "cmdheight", { "vim.o.cmdheight = 2" }, { "vim.o.cmdheight = 1" } },
+  { "laststatus", { "vim.o.laststatus = 2" }, { "vim.o.laststatus = 0" } },
+}
+
+-- A bottom split on a 41-line editor, with the tabline shown only for 2+ tabs and no status
+-- line for the last window.
+local function open_bottom(split)
+  fake("fake", CAT, {}, { terminal = { layout = "bottom", split = split } })
+  child.o.lines = 41
+  child.lua("vim.o.showtabline = 1; vim.o.laststatus = 0")
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+end
+
+local function run_all(calls)
+  for _, call in ipairs(calls) do
+    child.lua(call)
+  end
+end
+
+T["layout"]["the code keeps min_code_height when lines are taken"] = MiniTest.new_set({ parametrize = LINES_TAKEN })
+
+T["layout"]["the code keeps min_code_height when lines are taken"]["%s"] = function(_, change, undo)
+  -- An absolute height too large for the editor is capped: the code gets exactly 5 lines.
+  open_bottom({ height = 100 })
+  local function sizes()
+    return child.lua_get("{ vim.api.nvim_win_get_height(win), vim.api.nvim_win_get_height(code) }")
+  end
+  local opened = sizes()
+  run_all(change)
+  local taken = sizes()
+  run_all(undo)
+  eq({ opened[2], taken[2], sizes() }, { 5, 5, opened })
+  eq(taken[1] < opened[1], true)
+  eq(child.lua_get("vim.w[win].duet_hand or false"), false)
+end
+
+T["layout"]["a hand size survives lines being taken"] = MiniTest.new_set({ parametrize = LINES_TAKEN })
+
+T["layout"]["a hand size survives lines being taken"]["%s"] = function(_, change, undo)
+  -- With no minimum, the split can take every line but the code's 'winminheight'.
+  open_bottom({ height = 10, min_code_height = 0 })
+  child.lua("vim.api.nvim_win_set_height(win, 100)")
+  local hand = child.lua_get("vim.w[win].duet_hand")
+  eq(hand, child.lua_get("vim.api.nvim_win_get_height(win)"))
+  run_all(change)
+  eq(child.lua_get("vim.w[win].duet_hand"), hand)
+  run_all(undo)
+  eq(child.lua_get("{ vim.api.nvim_win_get_height(win), vim.w[win].duet_hand }"), { hand, hand })
+end
+
+T["layout"]["entering a tab with its own cmdheight keeps room for code"] = function()
+  open_bottom({ height = 100 })
+  child.lua("vim.o.cmdheight = 3")
+  child.lua("vim.cmd('tabnew')")
+  -- 'cmdheight' is local to a tab page: this one does not change the first tab's.
+  child.lua("vim.o.cmdheight = 1")
+  child.lua("vim.cmd('tabprevious')")
+  eq(child.lua_get("{ vim.o.cmdheight, vim.api.nvim_win_get_height(code) }"), { 3, 5 })
+end
+
 T["layout"]["hides a split that is the last window"] = function()
   fake("fake", CAT, {}, { terminal = { layout = "bottom" } })
   local info = child.lua([[
