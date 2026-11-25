@@ -9,6 +9,7 @@ local M = {}
 ---@field agent string name of the default agent adapter
 ---@field agents table<string, table> per-agent overrides, keyed by agent name
 ---@field terminal table agent terminal options
+---@field send table options for sending text to the agent
 ---@field review table review options
 
 ---@type duet.Config
@@ -23,6 +24,10 @@ M.defaults = {
     close_on_exit = "success",
     auto_insert = true,
     keys = { ["<C-q>"] = "normal_mode" },
+  },
+  send = {
+    submit_delay_ms = 100,
+    ready_timeout_ms = 10000,
   },
   review = {},
 }
@@ -128,6 +133,9 @@ M.schema = {
   ["terminal.auto_insert"] = { type = "boolean" },
   ["terminal.keys"] = { type = "table", open = true },
   ["terminal.keys.*"] = { type = validate_key_action, desc = '"normal_mode", "hide" or false' },
+  send = { type = "table" },
+  ["send.submit_delay_ms"] = { type = validate_count, desc = "non-negative integer" },
+  ["send.ready_timeout_ms"] = { type = validate_count, desc = "non-negative integer" },
   review = { type = "table" },
 }
 
