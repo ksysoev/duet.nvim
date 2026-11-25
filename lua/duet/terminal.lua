@@ -254,6 +254,14 @@ local function editor_size()
   return { columns = vim.o.columns, lines = math.max(1, vim.o.lines - vim.o.cmdheight - status - top), top = top }
 end
 
+---The room windows have, as a string to compare: it changes with the editor size, the
+---tabline, 'cmdheight' and 'laststatus'.
+---@param editor duet.EditorSize
+---@return string
+local function room_key(editor)
+  return ("%d:%d:%d"):format(editor.columns, editor.lines, editor.top or 0)
+end
+
 local function is_float(win)
   return vim.api.nvim_win_get_config(win).relative ~= ""
 end
@@ -307,13 +315,20 @@ local function get_size(win, axis)
   return axis == "height" and vim.api.nvim_win_get_height(win) or vim.api.nvim_win_get_width(win)
 end
 
----Record a split's size in `w:duet_size`: the size duet accounts for. A later change to
----any other size, outside an editor resize, is the user's (see `on_win_resized()`).
+---Record what duet sized a window for. For a split, `w:duet_size` is the size duet
+---accounts for: a later change to any other size, while the room stays the same, is the
+---user's (see `on_win_resized()`). For a split or a float, `w:duet_room` is the room it
+---was sized for (see `room_key()`). A window without a layout, e.g. one of the user's that
+---shows the terminal, is not recorded.
 ---@param win integer
-local function record_size(win)
+---@param editor? duet.EditorSize default: editor_size()
+local function record_size(win, editor)
   local axis = split_axis(win)
   if axis then
     vim.w[win].duet_size = get_size(win, axis)
+  end
+  if vim.w[win].duet_layout then
+    vim.w[win].duet_room = room_key(editor or editor_size())
   end
 end
 
@@ -340,56 +355,125 @@ local function title(agent)
   return (" %s "):format(agent.name)
 end
 
----On VimResized: centre and size floats again, and give splits the size `split_target()`
----says: a fraction gets its share of the new editor size, an absolute size is capped to
----leave room for the code and grows back up to the configured size, or to the user's own
----size once they resized the split by hand. Whatever Neovim did to the split's size during
----the resize is recorded as duet's, so `on_win_resized()` does not take it for the user's.
-local function relayout()
-  local opts = config()
-  local editor = editor_size()
+---Centre and size a float again for the editor size.
+---@param win integer
+---@param opts table the `terminal` config
+---@param editor duet.EditorSize
+local function fit_float(win, opts, editor)
+  -- Use the border the window has, which a later setup() may have changed in config.
+  -- Neovim 0.11 leaves `border` out of the config of a window without one.
+  local border = vim.api.nvim_win_get_config(win).border or "none"
+  local float = vim.tbl_extend("force", opts.float, { border = border })
+  local cfg = M.win_config("float", vim.tbl_extend("force", opts, { float = float }), editor)
+  cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
+  vim.api.nvim_win_set_config(win, cfg)
+  record_size(win, editor)
+end
+
+---Give a split the size `split_target()` says for the editor size: a fraction gets its
+---share, an absolute size is capped to leave room for the code and grows back up to the
+---configured size, or to the user's own size once they resized the split by hand. The
+---size it ends up with is recorded as duet's, so `on_win_resized()` does not take it for
+---the user's. Does nothing for a float or a window that is not a duet split.
+---@param win integer
+---@param opts table the `terminal` config
+---@param editor duet.EditorSize
+local function fit_split(win, opts, editor)
+  local axis = split_axis(win)
+  if not axis or is_float(win) then
+    return
+  end
+  local value = opts.split[axis]
+  -- A hand size counts only under the size option it was made with: after setup()
+  -- changes that option, the split takes the new size.
+  local hand = vim.w[win].duet_hand_for == value and vim.w[win].duet_hand or nil
+  local size
+  if axis == "height" then
+    size = M.split_target(value, editor.lines, opts.split.min_code_height, hand)
+  else
+    size = M.split_target(value, editor.columns, opts.split.min_code_width, hand)
+  end
+  if size ~= get_size(win, axis) then
+    if axis == "height" then
+      vim.api.nvim_win_set_height(win, size)
+    else
+      vim.api.nvim_win_set_width(win, size)
+    end
+  end
+  record_size(win, editor)
+end
+
+---The windows that show a duet terminal with a layout duet gave them, optionally only
+---those in one tab.
+---@param tab? integer
+---@return integer[]
+local function terminal_windows(tab)
+  local wins = {}
   for _, session in pairs(sessions) do
     for _, win in ipairs(vim.fn.win_findbuf(session.buf)) do
-      local axis = split_axis(win)
+      if vim.w[win].duet_layout and (not tab or vim.api.nvim_win_get_tabpage(win) == tab) then
+        wins[#wins + 1] = win
+      end
+    end
+  end
+  return wins
+end
+
+---@class duet.RelayoutOpts
+---@field tab? integer only the windows in this tab (default: every tab)
+---@field stale_only? boolean only the windows sized for a room other than the current one
+
+---Size duet terminal windows again for the room windows have: floats with fit_float(),
+---splits with fit_split(). Whatever Neovim did to a split's size meanwhile is recorded as
+---duet's. VimResized sizes every window, in every tab. A change in the room without an
+---editor resize, e.g. from the tabline, 'cmdheight' or 'laststatus', is caught on
+---WinResized and sizes only the current tab's windows: another tab may have its own
+---'cmdheight', and Neovim resizes its windows when it is entered, which then comes here.
+---@param opts? duet.RelayoutOpts
+local function relayout(opts)
+  opts = opts or {}
+  local cfg = config()
+  local editor = editor_size()
+  local room = room_key(editor)
+  for _, win in ipairs(terminal_windows(opts.tab)) do
+    if not (opts.stale_only and vim.w[win].duet_room == room) then
       if is_float(win) then
-        -- Use the border the window has, which a later setup() may have changed in config.
-        -- Neovim 0.11 leaves `border` out of the config of a window without one.
-        local border = vim.api.nvim_win_get_config(win).border or "none"
-        local float = vim.tbl_extend("force", opts.float, { border = border })
-        local cfg = M.win_config("float", vim.tbl_extend("force", opts, { float = float }), editor)
-        cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
-        vim.api.nvim_win_set_config(win, cfg)
-      elseif axis then
-        local value = opts.split[axis]
-        -- A hand size counts only under the size option it was made with: after setup()
-        -- changes that option, the split takes the new size.
-        local hand = vim.w[win].duet_hand_for == value and vim.w[win].duet_hand or nil
-        local size
-        if axis == "height" then
-          size = M.split_target(value, editor.lines, opts.split.min_code_height, hand)
-        else
-          size = M.split_target(value, editor.columns, opts.split.min_code_width, hand)
-        end
-        if size ~= get_size(win, axis) then
-          if axis == "height" then
-            vim.api.nvim_win_set_height(win, size)
-          else
-            vim.api.nvim_win_set_width(win, size)
-          end
-        end
-        record_size(win)
+        fit_float(win, cfg, editor)
+      else
+        fit_split(win, cfg, editor)
       end
     end
   end
 end
 
+---Whether a duet terminal window in the current tab was sized for a room other than the
+---current one.
+---@return boolean
+local function room_changed()
+  local room = room_key(editor_size())
+  for _, win in ipairs(terminal_windows(vim.api.nvim_get_current_tabpage())) do
+    if vim.w[win].duet_room ~= room then
+      return true
+    end
+  end
+  return false
+end
+
 ---On WinResized: a split whose size changed since duet last recorded it was resized by
----the user (or by something else outside an editor resize), so that size becomes the one
----the split keeps and grows back to, in `w:duet_hand`. `w:duet_hand_for` records the size
----option it was made under. Only windows that show a duet terminal count: a panel the user
----put another buffer in (e.g. with :edit) is not tracked. A resize that comes with
----entering a window is Neovim's ('winwidth', 'winheight'), so it is recorded as duet's.
+---the user (or by something else that left the room for windows as it was), so that size
+---becomes the one the split keeps and grows back to, in `w:duet_hand`. `w:duet_hand_for`
+---records the size option it was made under. Only windows that show a duet terminal count:
+---a panel the user put another buffer in (e.g. with :edit) is not tracked. Resizes that are
+---Neovim's are not the user's: those that come with entering a window ('winwidth',
+---'winheight') are recorded as duet's, and those that come with a change in the room
+---(the tabline, 'cmdheight', 'laststatus', entering a tab) make duet size the current tab's
+---windows again.
 local function on_win_resized()
+  if room_changed() then
+    relayout({ tab = vim.api.nvim_get_current_tabpage(), stale_only = true })
+    enlarging = false
+    return
+  end
   for _, win in ipairs(vim.v.event.windows or {}) do
     local axis = vim.api.nvim_win_is_valid(win) and split_axis(win)
     if axis and not is_float(win) and vim.b[vim.api.nvim_win_get_buf(win)].duet_session then
@@ -436,11 +520,13 @@ local function ensure_autocmds()
   vim.api.nvim_create_autocmd("VimResized", {
     group = augroup,
     desc = "duet: resize agent terminals",
-    callback = relayout,
+    callback = function()
+      relayout()
+    end,
   })
   vim.api.nvim_create_autocmd("WinResized", {
     group = augroup,
-    desc = "duet: remember agent terminals resized by hand",
+    desc = "duet: remember agent terminals resized by hand, follow changes in the room",
     callback = on_win_resized,
   })
   vim.api.nvim_create_autocmd("WinEnter", {
@@ -504,6 +590,7 @@ end
 local function forget_window(win)
   vim.w[win].duet_layout = nil
   vim.w[win].duet_size = nil
+  vim.w[win].duet_room = nil
   vim.w[win].duet_hand = nil
   vim.w[win].duet_hand_for = nil
 end
@@ -923,6 +1010,16 @@ local function hide_others(self)
   end
 end
 
+---Make the session the one shown in the current tab: hide the others, then give its window
+---its size. A split opened while another session's split was still shown only got the room
+---that one left (see 'winminwidth').
+---@param self duet.Session
+---@param win integer the session's window
+local function take_screen(self, win)
+  hide_others(self)
+  fit_split(win, config(), editor_size())
+end
+
 ---@class duet.SessionOpts
 ---@field root? string project root (default: M.root())
 ---@field win? integer start the agent in this window instead of opening one
@@ -1005,7 +1102,7 @@ function Session.new(agent, opts)
   sessions[id] = self
   setup_buffer(self)
   if win then
-    hide_others(self)
+    take_screen(self, win)
   end
   return self
 end
@@ -1049,7 +1146,7 @@ function Session:show()
     if not win then
       return nil, err
     end
-    hide_others(self)
+    take_screen(self, win)
   end
   if not self.job then
     self.exit_seen = true
