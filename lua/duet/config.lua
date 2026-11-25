@@ -19,7 +19,7 @@ M.defaults = {
   terminal = {
     layout = "right",
     float = { width = 0.9, height = 0.9, border = "rounded" },
-    split = { width = 80, height = 0.4 },
+    split = { width = 80, height = 0.4, min_code_width = 20, min_code_height = 5 },
     close_on_exit = "success",
     auto_insert = true,
     keys = { ["<C-q>"] = "normal_mode" },
@@ -77,6 +77,10 @@ local function validate_size(v)
   return type(v) == "number" and v > 0
 end
 
+local function validate_count(v)
+  return type(v) == "number" and v >= 0 and v == math.floor(v)
+end
+
 -- Border names differ between Neovim versions, so any string passes here; nvim_open_win
 -- reports an unknown name when the terminal opens. A list must have 1, 2, 4 or 8 parts.
 local function validate_border(v)
@@ -115,6 +119,8 @@ M.schema = {
   ["terminal.split"] = { type = "table" },
   ["terminal.split.width"] = { type = validate_size, desc = "positive number" },
   ["terminal.split.height"] = { type = validate_size, desc = "positive number" },
+  ["terminal.split.min_code_width"] = { type = validate_count, desc = "non-negative integer" },
+  ["terminal.split.min_code_height"] = { type = validate_count, desc = "non-negative integer" },
   ["terminal.close_on_exit"] = {
     type = one_of({ "success", "always", "never" }),
     desc = '"success", "always" or "never"',

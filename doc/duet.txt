@@ -132,11 +132,23 @@ terminal ~
         unknown name is reported when the terminal opens.
                                                   *duet-config-terminal-split*
     split ~
-        `{ width, height }` (default: `{ width = 80, height = 0.4 }`)
+        `{ width, height, min_code_width, min_code_height }` (default:
+        `{ width = 80, height = 0.4,`
+          `min_code_width = 20, min_code_height = 5 }`)
         Width of the `"right"` and `"left"` splits, height of the `"bottom"`
         split. A fractional size is applied again when the editor is
-        resized; an absolute size only when the split opens, so a split you
-        resized by hand keeps its size.
+        resized.
+
+        An absolute size is capped so the rest of the editor keeps
+        `min_code_width` columns (`min_code_height` lines for `"bottom"`),
+        plus the separator. On an 80-column editor the default panel is 59
+        columns wide and the code gets 20. The cap is applied when the split
+        opens and when the editor is resized: a split that no longer leaves
+        that room shrinks, and grows back toward its size when the editor
+        grows. A split you resized by hand keeps its size unless it no longer
+        fits. Fractional sizes are not capped. Set a minimum to `0` to leave
+        only what 'winminwidth' and 'winminheight' require, which Neovim
+        always keeps.
                                           *duet-config-terminal-close_on_exit*
     close_on_exit ~
         `string` (default: `"success"`)

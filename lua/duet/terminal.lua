@@ -151,6 +151,47 @@ function M.resolve_size(value, total)
   return math.max(1, math.min(size, total))
 end
 
+---Size of a split: `value` resolved against `total` (see `resolve_size()`). An absolute
+---value is also capped so the other windows keep `keep` cells, plus one for the separator
+---or status line between them and the split. A fraction is not capped. Pure.
+---@param value number `split.width` or `split.height`
+---@param total integer editor columns, or lines available for windows
+---@param keep integer `split.min_code_width` or `split.min_code_height`
+---@return integer
+function M.split_size(value, total, keep)
+  local size = M.resolve_size(value, total)
+  if value <= 1 then
+    return size
+  end
+  return math.max(1, math.min(size, total - keep - 1))
+end
+
+---New size for a split after the editor was resized, or nil to leave it. Pure.
+---A fractional split always gets its share. An absolute split that still has the size
+---duet last gave it follows `split_size()`, so it shrinks with the editor and grows back.
+---A split the user resized by hand keeps its size, unless it no longer leaves room for the
+---other windows: then it shrinks to the cap.
+---@param value number `split.width` or `split.height`
+---@param total integer editor columns, or lines available for windows
+---@param keep integer `split.min_code_width` or `split.min_code_height`
+---@param current integer the split's size now
+---@param last? integer the size duet last gave the split
+---@return integer|nil
+function M.split_resize(value, total, keep, current, last)
+  local size = M.split_size(value, total, keep)
+  if size == current then
+    return nil
+  end
+  if value <= 1 or current == last then
+    return size
+  end
+  local cap = math.max(1, total - keep - 1)
+  if current > cap then
+    return cap
+  end
+  return nil
+end
+
 ---Cells a border takes on each side. Pure. A list repeats to 8 parts (corners and edges,
 ---clockwise from the top-left), as in |nvim_open_win()|; an empty edge takes no space.
 ---@param border? string|(string|string[])[]
@@ -210,9 +251,9 @@ function M.win_config(layout, opts, editor, title)
     end
     return cfg
   elseif layout == "bottom" then
-    return { split = "below", win = -1, height = M.resolve_size(opts.split.height, lines) }
+    return { split = "below", win = -1, height = M.split_size(opts.split.height, lines, opts.split.min_code_height) }
   end
-  return { split = layout, win = -1, width = M.resolve_size(opts.split.width, columns) }
+  return { split = layout, win = -1, width = M.split_size(opts.split.width, columns, opts.split.min_code_width) }
 end
 
 ---The editor area windows can use: the tabline, the command line and a status line are
@@ -254,6 +295,18 @@ local function apply_window_options(win, layout)
   vim.w[win].duet_layout = layout
 end
 
+---Record a split's size in `w:duet_size`, so a later resize can tell it from one the user
+---made by hand.
+---@param win integer
+local function record_size(win)
+  local layout = vim.w[win].duet_layout
+  if layout == "bottom" then
+    vim.w[win].duet_size = vim.api.nvim_win_get_height(win)
+  elseif layout == "right" or layout == "left" then
+    vim.w[win].duet_size = vim.api.nvim_win_get_width(win)
+  end
+end
+
 ---Open a window for `buf` with the configured layout. Focus does not move.
 ---@param buf integer
 ---@param title string
@@ -267,6 +320,7 @@ local function open_window(buf, title)
     return nil, ("terminal: cannot open window: %s"):format(win)
   end
   apply_window_options(win, opts.layout)
+  record_size(win)
   return win
 end
 
@@ -276,9 +330,9 @@ local function title(agent)
   return (" %s "):format(agent.name)
 end
 
----On VimResized: centre and size floats again, and give splits with a fractional size
----their share of the new editor size. Absolute split sizes are left alone, so a split the
----user resized by hand keeps its size.
+---On VimResized: centre and size floats again, and size splits as `split_resize()` says:
+---a fraction gets its share of the new editor size, an absolute size shrinks to leave room
+---for the code and grows back while the user has not resized the split by hand.
 local function relayout()
   local opts = config()
   local editor = editor_size()
@@ -293,11 +347,21 @@ local function relayout()
         cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
         vim.api.nvim_win_set_config(win, cfg)
       elseif vim.w[win].duet_layout == "bottom" then
-        if opts.split.height <= 1 then
-          vim.api.nvim_win_set_height(win, M.resolve_size(opts.split.height, editor.lines))
+        local current = vim.api.nvim_win_get_height(win)
+        local size =
+          M.split_resize(opts.split.height, editor.lines, opts.split.min_code_height, current, vim.w[win].duet_size)
+        if size then
+          vim.api.nvim_win_set_height(win, size)
+          record_size(win)
         end
-      elseif vim.w[win].duet_layout and opts.split.width <= 1 then
-        vim.api.nvim_win_set_width(win, M.resolve_size(opts.split.width, editor.columns))
+      elseif vim.w[win].duet_layout then
+        local current = vim.api.nvim_win_get_width(win)
+        local size =
+          M.split_resize(opts.split.width, editor.columns, opts.split.min_code_width, current, vim.w[win].duet_size)
+        if size then
+          vim.api.nvim_win_set_width(win, size)
+          record_size(win)
+        end
       end
     end
   end
