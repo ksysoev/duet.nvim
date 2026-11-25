@@ -191,4 +191,18 @@ M.register("restart", {
   complete = complete_agent,
 })
 
+M.register("send", {
+  desc = "Send text to the agent and submit it (:Duet! send only pastes it)",
+  impl = function(args, opts)
+    return require("duet.send").cmd_send(args, opts)
+  end,
+})
+
+M.register("prompt", {
+  desc = "Type a prompt and send it to the agent (:Duet! prompt only pastes it)",
+  impl = function(args, opts)
+    return require("duet.send").cmd_prompt(args, opts)
+  end,
+})
+
 return M
