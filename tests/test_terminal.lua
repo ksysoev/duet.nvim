@@ -1141,7 +1141,7 @@ T["layout"]["restart keeps the terminal's window options"]["%s"] = function(layo
   eq(info.fix, layout == "right")
 end
 
-T["layout"]["resizing the editor resizes fractional splits only"] = function()
+T["layout"]["resizing the editor resizes fractional splits and keeps hand sizes"] = function()
   fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 0.5 } } })
   local widths = child.lua([[
     local s = T.open()
@@ -1150,12 +1150,236 @@ T["layout"]["resizing the editor resizes fractional splits only"] = function()
     vim.cmd("doautocmd VimResized")
     local fraction = vim.api.nvim_win_get_width(win)
     require("duet").setup({ agent = "fake", terminal = { layout = "right", split = { width = 30 } } })
-    vim.api.nvim_win_set_width(win, 40)
+    return fraction
+  ]])
+  -- A separate call, so WinResized sees the resize by hand before the editor resize.
+  child.lua("vim.api.nvim_win_set_width(T.current():window(), 40)")
+  local absolute = child.lua([[
     vim.o.columns = 100
     vim.cmd("doautocmd VimResized")
-    return { fraction, vim.api.nvim_win_get_width(win) }
+    return vim.api.nvim_win_get_width(T.current():window())
   ]])
-  eq(widths, { 60, 40 })
+  eq({ widths, absolute }, { 60, 40 })
+end
+
+T["layout"]["the default panel leaves room for code on an 80-column editor"] = function()
+  fake("fake", CAT)
+  child.o.columns = 80
+  local widths = child.lua([[
+    local code = vim.api.nvim_get_current_win()
+    local s = T.open()
+    return { panel = vim.api.nvim_win_get_width(s:window()), code = vim.api.nvim_win_get_width(code) }
+  ]])
+  eq(widths, { panel = 59, code = 20 })
+end
+
+T["layout"]["shrinking the editor shrinks an absolute split"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 80 } } })
+  local widths = child.lua([[
+    local code = vim.api.nvim_get_current_win()
+    local s = T.open()
+    local win = s:window()
+    local function sizes()
+      return { vim.api.nvim_win_get_width(win), vim.api.nvim_win_get_width(code) }
+    end
+    local out = { open = sizes() }
+    vim.o.columns = 90
+    vim.cmd("doautocmd VimResized")
+    out.shrunk = sizes()
+    vim.o.columns = 200
+    vim.cmd("doautocmd VimResized")
+    out.grown = sizes()
+    return out
+  ]])
+  eq(widths, { open = { 80, 119 }, shrunk = { 69, 20 }, grown = { 80, 119 } })
+end
+
+T["layout"]["a split resized by hand keeps its size until it no longer fits"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 80 } } })
+  child.lua("_G.win = T.open():window()")
+  -- A separate call, so WinResized sees the resize by hand before the editor resizes.
+  child.lua("vim.api.nvim_win_set_width(win, 40)")
+  local widths = {}
+  for _, columns in ipairs({ 100, 200, 50, 200 }) do
+    child.o.columns = columns
+    widths[#widths + 1] = child.lua_get("vim.api.nvim_win_get_width(win)")
+  end
+  eq(widths, { 40, 40, 29, 40 })
+end
+
+T["layout"]["a split Neovim shrinks by itself grows back"] = MiniTest.new_set({
+  parametrize = {
+    { "min_code_width = 0", { split = { width = 80, min_code_width = 0 } }, "", 50 },
+    { "winminwidth above min_code_width", {}, "vim.o.winwidth = 30; vim.o.winminwidth = 30", 90 },
+  },
+})
+
+T["layout"]["a split Neovim shrinks by itself grows back"]["%s"] = function(_, terminal, setup, small)
+  fake("fake", CAT, {}, { terminal = terminal })
+  child.lua(setup)
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+  child.o.columns = small
+  local shrunk = child.lua_get("{ vim.api.nvim_win_get_width(win), vim.api.nvim_win_get_width(code) }")
+  child.o.columns = 200
+  eq(shrunk[1] < 80, true)
+  eq(shrunk[1] + shrunk[2] + 1, small)
+  eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 80)
+end
+
+T["layout"]["restarting in a window of the user's does not make it a split"] = function()
+  fake("fake", CAT)
+  child.lua([[
+    _G.left = vim.api.nvim_get_current_win()
+    vim.cmd("vsplit")
+    _G.right = vim.api.nvim_get_current_win()
+    local s = T.open()
+    local buf = s.buf
+    s:hide()
+    vim.api.nvim_win_set_buf(left, buf)
+    assert(T.restart())
+  ]])
+  local info = child.lua_get([[{
+    layout = vim.w[left].duet_layout or false,
+    fix = vim.wo[left].winfixwidth,
+    terminal = vim.api.nvim_win_get_buf(left) == T.current().buf,
+  }]])
+  eq(info, { layout = false, fix = false, terminal = true })
+  -- duet does not size the window as a panel, so the other one is not squeezed.
+  child.o.columns = 150
+  eq(child.lua_get("vim.api.nvim_win_get_width(left) ~= 80"), true)
+  child.o.columns = 60
+  eq(child.lua_get("vim.api.nvim_win_get_width(right) > 1"), true)
+end
+
+T["layout"]["a window the terminal left is not a split any more"] = function()
+  fake("fake", CAT)
+  -- open() focuses the panel, so :only leaves it as the tab's last window, and hiding the
+  -- session puts another buffer in it instead of closing it.
+  child.lua([[
+    local s = T.open()
+    _G.win, _G.buf = s:window(), s.buf
+    vim.cmd("only")
+    assert(s:hide())
+  ]])
+  eq(
+    child.lua_get([[{
+      valid = vim.api.nvim_win_is_valid(win),
+      layout = vim.w[win].duet_layout or false,
+      fix = vim.wo[win].winfixwidth,
+    }]]),
+    { valid = true, layout = false, fix = false }
+  )
+  child.lua("vim.cmd('vsplit')")
+  eq(child.lua_get("vim.w[win].duet_hand or false"), false)
+  -- Shown there again and restarted, it is not sized as a panel.
+  child.lua("vim.api.nvim_win_set_buf(win, buf); assert(T.restart())")
+  eq(child.lua_get("{ vim.w[win].duet_layout or false, vim.wo[win].winfixwidth }"), { false, false })
+  child.o.columns = 150
+  eq(child.lua_get("vim.api.nvim_win_get_width(win) ~= 80"), true)
+end
+
+T["layout"]["a window enlarged on enter is not a hand size"] = MiniTest.new_set({
+  parametrize = {
+    { "defaults on a narrow editor", {}, 30 },
+    { "min_code_width below winwidth", { split = { min_code_width = 10 } }, 100 },
+  },
+})
+
+T["layout"]["a window enlarged on enter is not a hand size"]["%s"] = function(_, terminal, columns)
+  fake("fake", CAT, {}, { terminal = terminal })
+  child.o.columns = columns
+  -- open() focuses the panel; moving back makes Neovim widen the code to 'winwidth'.
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+  child.lua("vim.api.nvim_set_current_win(code)")
+  eq(child.lua_get("{ vim.api.nvim_win_get_width(code), vim.w[win].duet_hand or false }"), { 20, false })
+  child.o.columns = 200
+  eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 80)
+end
+
+T["layout"]["a resize by hand after an enlargement is still noticed"] = function()
+  fake("fake", CAT)
+  child.o.columns = 30
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+  -- Neovim widens the code to 'winwidth' and takes the columns from the panel.
+  child.lua("vim.api.nvim_set_current_win(code)")
+  eq(child.lua_get("{ vim.api.nvim_win_get_width(win), vim.w[win].duet_hand or false }"), { 9, false })
+  child.lua("vim.api.nvim_win_set_width(win, 5)")
+  eq(child.lua_get("vim.w[win].duet_hand or false"), 5)
+end
+
+T["layout"]["restarting in a sidebar of the user's keeps its fixed width"] = function()
+  fake("fake", CAT)
+  child.lua([[
+    vim.cmd("vsplit")
+    _G.side = vim.api.nvim_get_current_win()
+    vim.wo[side].winfixwidth = true
+    local s = T.open()
+    local buf = s.buf
+    s:hide()
+    vim.api.nvim_win_set_buf(side, buf)
+    assert(T.restart())
+  ]])
+  eq(child.lua_get("{ vim.wo[side].winfixwidth, vim.w[side].duet_layout or false }"), { true, false })
+end
+
+T["layout"]["a panel showing another buffer is not tracked"] = function()
+  fake("fake", CAT)
+  child.lua("_G.win = T.open():window(); vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))")
+  -- A separate call, so WinResized sees the resize.
+  child.lua("vim.api.nvim_win_set_width(win, 50)")
+  eq(child.lua_get("vim.w[win].duet_hand or false"), false)
+end
+
+T["layout"]["a split in another tab follows editor resizes"] = function()
+  fake("fake", CAT)
+  child.lua("_G.win = T.open():window(); vim.cmd('tabnew')")
+  child.o.columns = 90
+  child.lua("vim.cmd('tabprevious')")
+  local shrunk = child.lua_get("{ vim.api.nvim_win_get_width(win), vim.w[win].duet_hand or false }")
+  child.lua("vim.cmd('tabnext')")
+  child.o.columns = 200
+  child.lua("vim.cmd('tabprevious')")
+  local grown = child.lua_get("{ vim.api.nvim_win_get_width(win), vim.w[win].duet_hand or false }")
+  eq({ shrunk, grown }, { { 69, false }, { 80, false } })
+end
+
+T["layout"]["a hand size gives way to a size set with setup()"] = MiniTest.new_set({
+  parametrize = { { "from a fraction", 0.5 }, { "from an absolute size", 80 } },
+})
+
+T["layout"]["a hand size gives way to a size set with setup()"]["%s"] = function(_, width)
+  fake("fake", CAT, {}, { terminal = { split = { width = width } } })
+  child.lua("_G.win = T.open():window()")
+  -- A separate call, so WinResized sees the resize by hand before the editor resizes.
+  child.lua("vim.api.nvim_win_set_width(win, 30)")
+  child.lua([[require("duet").setup({ agent = "fake", terminal = { split = { width = 100 } } })]])
+  child.o.columns = 199
+  eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 100)
+end
+
+T["layout"]["a tiny editor shares its width with the panel"] = function()
+  fake("fake", CAT)
+  child.o.columns = 20
+  local widths = child.lua([[
+    local code = vim.api.nvim_get_current_win()
+    local s = T.open()
+    return { panel = vim.api.nvim_win_get_width(s:window()), code = vim.api.nvim_win_get_width(code) }
+  ]])
+  eq(widths, { panel = 9, code = 10 })
+end
+
+T["layout"]["shrinking the editor shrinks an absolute bottom split"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "bottom", split = { height = 30 } } })
+  local info = child.lua([[
+    local code = vim.api.nvim_get_current_win()
+    local s = T.open()
+    local win = s:window()
+    vim.o.lines = 20
+    vim.cmd("doautocmd VimResized")
+    return { panel = vim.api.nvim_win_get_height(win), code = vim.api.nvim_win_get_height(code) }
+  ]])
+  eq(info.code >= 5, true)
+  eq(info.panel, child.lua_get("vim.o.lines - vim.o.cmdheight - 1") - 5 - 1)
 end
 
 T["layout"]["resizing keeps a float's own border"] = function()
@@ -1193,8 +1417,10 @@ end
 
 local OPTS = {
   float = { width = 0.5, height = 0.5, border = "rounded" },
-  split = { width = 0.4, height = 10 },
+  split = { width = 0.4, height = 10, min_code_width = 20, min_code_height = 5 },
 }
+
+local ABSOLUTE = { float = OPTS.float, split = { width = 80, height = 30, min_code_width = 20, min_code_height = 5 } }
 
 local geometry_cases = {
   {
@@ -1274,6 +1500,48 @@ local geometry_cases = {
     layout = "bottom",
     opts = OPTS,
     expected = { split = "below", win = -1, height = 10 },
+  },
+  {
+    name = "right split, absolute, capped on a small editor",
+    layout = "right",
+    opts = ABSOLUTE,
+    editor = { columns = 80 },
+    expected = { split = "right", win = -1, width = 59 },
+  },
+  {
+    name = "left split, absolute, unchanged on a large editor",
+    layout = "left",
+    opts = ABSOLUTE,
+    editor = { columns = 200 },
+    expected = { split = "left", win = -1, width = 80 },
+  },
+  {
+    name = "bottom split, absolute, capped on a small editor",
+    layout = "bottom",
+    opts = ABSOLUTE,
+    editor = { lines = 20 },
+    expected = { split = "below", win = -1, height = 14 },
+  },
+  {
+    name = "bottom split, absolute, unchanged on a large editor",
+    layout = "bottom",
+    opts = ABSOLUTE,
+    editor = { lines = 60 },
+    expected = { split = "below", win = -1, height = 30 },
+  },
+  {
+    name = "right split without min_code_width leaves the separator",
+    layout = "right",
+    opts = { float = OPTS.float, split = { width = 200, height = 0.4 } },
+    editor = { columns = 120 },
+    expected = { split = "right", win = -1, width = 119 },
+  },
+  {
+    name = "right split, fraction, not capped on a small editor",
+    layout = "right",
+    opts = { float = OPTS.float, split = { width = 0.9, height = 0.4, min_code_width = 20, min_code_height = 5 } },
+    editor = { columns = 30 },
+    expected = { split = "right", win = -1, width = 27 },
   },
 }
 
@@ -1415,6 +1683,49 @@ for _, case in ipairs(message_cases) do
   T["exit_message()"][case.name] = function()
     h.reset_modules()
     eq(require("duet.terminal").exit_message(unpack(case.args)), case.expected)
+  end
+end
+
+-- args: total, keep
+local split_cap_cases = {
+  { name = "leaves keep plus the separator", args = { 80, 20 }, expected = 59 },
+  { name = "large editor", args = { 200, 20 }, expected = 179 },
+  { name = "keep 0 leaves the separator", args = { 80, 0 }, expected = 79 },
+  { name = "at the crossover", args = { 41, 20 }, expected = 20 },
+  { name = "too small for both shares evenly", args = { 20, 20 }, expected = 9 },
+  { name = "lines too small for both share evenly", args = { 8, 5 }, expected = 3 },
+  { name = "a single cell", args = { 1, 20 }, expected = 1 },
+  { name = "keep defaults to 0", args = { 80 }, expected = 79 },
+}
+
+T["split_cap()"] = MiniTest.new_set()
+for _, case in ipairs(split_cap_cases) do
+  T["split_cap()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").split_cap(unpack(case.args)), case.expected)
+  end
+end
+
+-- args: value, total, keep, hand
+local split_target_cases = {
+  { name = "fraction gets its share", args = { 0.5, 120, 20 }, expected = 60 },
+  { name = "fraction ignores a hand size", args = { 0.5, 120, 20, 40 }, expected = 60 },
+  { name = "fraction is not capped", args = { 0.9, 30, 20 }, expected = 27 },
+  { name = "absolute fits", args = { 80, 200, 20 }, expected = 80 },
+  { name = "absolute capped", args = { 80, 80, 20 }, expected = 59 },
+  { name = "absolute exactly at the cap", args = { 59, 80, 20 }, expected = 59 },
+  { name = "absolute on a tiny editor shares evenly", args = { 80, 20, 20 }, expected = 9 },
+  { name = "hand size below the cap", args = { 80, 200, 20, 40 }, expected = 40 },
+  { name = "hand size capped", args = { 80, 50, 20, 40 }, expected = 29 },
+  { name = "hand size wider than configured", args = { 80, 200, 20, 120 }, expected = 120 },
+  { name = "hand size of 1 is not a fraction", args = { 80, 200, 20, 1 }, expected = 1 },
+}
+
+T["split_target()"] = MiniTest.new_set()
+for _, case in ipairs(split_target_cases) do
+  T["split_target()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").split_target(unpack(case.args, 1, 4)), case.expected)
   end
 end
 

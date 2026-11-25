@@ -112,6 +112,21 @@ T["validation error"] = MiniTest.new_set({
     { "unknown layout", { terminal = { layout = "top" } }, "^terminal.layout: expected" },
     { "zero float width", { terminal = { float = { width = 0 } } }, "^terminal.float.width: expected" },
     { "split height as a string", { terminal = { split = { height = "1" } } }, "^terminal.split.height: expected" },
+    {
+      "negative min_code_width",
+      { terminal = { split = { min_code_width = -1 } } },
+      "^terminal.split.min_code_width: expected",
+    },
+    {
+      "infinite min_code_width",
+      { terminal = { split = { min_code_width = math.huge } } },
+      "^terminal.split.min_code_width: expected",
+    },
+    {
+      "fractional min_code_height",
+      { terminal = { split = { min_code_height = 0.5 } } },
+      "^terminal.split.min_code_height: expected",
+    },
     { "border as a number", { terminal = { float = { border = 1 } } }, "^terminal.float.border: expected" },
     {
       "border list of 3",
