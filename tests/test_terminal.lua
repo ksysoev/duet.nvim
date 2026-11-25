@@ -1488,6 +1488,34 @@ T["layout"]["a hand size survives lines being taken"]["%s"] = function(_, change
   eq(child.lua_get("{ vim.api.nvim_win_get_height(win), vim.w[win].duet_hand }"), { hand, hand })
 end
 
+T["layout"]["a float moved by hand stays put when the room does not change"] = function()
+  fake("fake", CAT, {}, { terminal = { layout = "float" } })
+  child.o.showtabline = 2
+  child.lua("_G.win = T.open():window()")
+  child.lua("vim.api.nvim_win_set_config(win, { relative = 'editor', row = 3, col = 3, width = 20, height = 5 })")
+  -- A tab switch and setting an option to the value it has leave the room as it was.
+  run_all({ "vim.cmd('tabnew')", "vim.cmd('tabprevious')", "vim.o.cmdheight = vim.o.cmdheight" })
+  eq(
+    child.lua_get(
+      "(function() local c = vim.api.nvim_win_get_config(win) return { c.row, c.col, c.width, c.height } end)()"
+    ),
+    { 3, 3, 20, 5 }
+  )
+end
+
+T["layout"]["a change in the room leaves the splits of other tabs alone"] = function()
+  open_bottom({ height = 100 })
+  child.lua("vim.o.cmdheight = 3")
+  local sizes = "{ vim.api.nvim_win_get_height(win), vim.api.nvim_win_get_height(code) }"
+  local before = child.lua_get(sizes)
+  -- The new tab shows the tabline; 'cmdheight' is local to it.
+  child.lua("vim.cmd('tabnew')")
+  child.lua("vim.o.cmdheight = 1")
+  eq(child.lua_get(sizes), before)
+  child.lua("vim.cmd('tabprevious')")
+  eq(child.lua_get("{ vim.api.nvim_win_get_height(code), vim.w[win].duet_hand or false }"), { 5, false })
+end
+
 T["layout"]["entering a tab with its own cmdheight keeps room for code"] = function()
   open_bottom({ height = 100 })
   child.lua("vim.o.cmdheight = 3")

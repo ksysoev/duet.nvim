@@ -151,16 +151,20 @@ terminal ~
         Fractional sizes are not capped.
 
         The cap is applied when the split opens, when it replaces another
-        session's split, when the editor is resized, and when the tabline,
-        the command line ('cmdheight') or the status line ('laststatus')
-        take more or fewer lines, e.g. when a second tab page shows the
-        tabline: a split that no longer leaves that room shrinks, and grows
-        back toward its size when there is room again. If you resize the
-        split by hand, that size is the one it keeps, shrinks from and grows
-        back to, until the split is closed or `setup()` changes `width` or
-        `height`. Any other change to its size counts as yours; one made in
-        the same instant as one of the changes above or as moving to
-        another window, e.g. by a script, is not noticed.
+        session's split, when the editor is resized, and when the room for
+        windows changes in the current tab page: the tabline, the command
+        line ('cmdheight') or the status line ('laststatus') take more or
+        fewer lines, e.g. when a second tab page shows the tabline. A split
+        that no longer leaves that room shrinks, and grows back toward its
+        size when there is room again. A split in another tab page is sized
+        when you enter it. If you resize the split by hand, that size is the
+        one it keeps, shrinks from and grows back to, until the split is
+        closed or `setup()` changes `width` or `height`. Any other change to
+        its size counts as yours, except one that comes with a change in the
+        room: dragging the last status line to resize the command line
+        leaves the split's size alone. A change made in the same instant as
+        a change in the room or as moving to another window, e.g. by a
+        script, is not noticed.
 
         Set a minimum to `0` to leave only what 'winminwidth' and
         'winminheight' require, which Neovim always keeps. Only the editor's
