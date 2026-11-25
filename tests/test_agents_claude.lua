@@ -320,6 +320,9 @@ T["format_ref()"] = MiniTest.new_set({
     { "one line", { path = "src/a.lua", range = { 7, 7 } }, "@src/a.lua (line 7)" },
     { "lines", { path = "src/a.lua", range = { 10, 20 } }, "@src/a.lua (lines 10-20)" },
     { "absolute path", { path = "/tmp/x.lua" }, "@/tmp/x.lua" },
+    { "path with a space", { path = "docs/my notes.md" }, "docs/my notes.md" },
+    { "path with a space and lines", { path = "docs/my notes.md", range = { 3, 5 } }, "docs/my notes.md (lines 3-5)" },
+    { "path with a tab", { path = "a\tb.lua", range = { 1, 1 } }, "a\tb.lua (line 1)" },
   },
 })
 

@@ -9,7 +9,8 @@
 --- - Tool timeout: `MCP_TOOL_TIMEOUT` in milliseconds.
 --- - File references: `@path` (relative or absolute) includes the file in the prompt
 ---   (https://code.claude.com/docs/en/common-workflows). The docs give no form for a line
----   range, so the lines are named in words after the reference.
+---   range, so the lines are named in words after the reference, and no way to quote a
+---   path, so a path with whitespace is written without the `@`.
 
 local M = {}
 
@@ -119,12 +120,14 @@ function M:launch(spec)
   }
 end
 
----Refer to a file in a prompt: `@path`, `@path (line 10)` or `@path (lines 10-20)`.
+---Refer to a file in a prompt: `@path`, `@path (line 10)` or `@path (lines 10-20)`. A path
+---with whitespace gets no `@`: the mention would end at the first space and name a file
+---that doesn't exist, while a plain path still tells Claude which file to read.
 ---@param path string relative to the session root
 ---@param range? integer[] `{ start_line, end_line }`
 ---@return string
 function M:format_ref(path, range)
-  local ref = "@" .. path
+  local ref = path:find("%s") and path or ("@" .. path)
   if not range then
     return ref
   end
