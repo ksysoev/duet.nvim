@@ -7,6 +7,9 @@
 ---   A hook `timeout` is in seconds.
 --- - System prompt: `--append-system-prompt <text>`.
 --- - Tool timeout: `MCP_TOOL_TIMEOUT` in milliseconds.
+--- - File references: `@path` (relative or absolute) includes the file in the prompt
+---   (https://code.claude.com/docs/en/common-workflows). The docs give no form for a line
+---   range, so the lines are named in words after the reference.
 
 local M = {}
 
@@ -114,6 +117,21 @@ function M:launch(spec)
     env = vim.tbl_extend("force", env, self.env or {}),
     files = files,
   }
+end
+
+---Refer to a file in a prompt: `@path`, `@path (line 10)` or `@path (lines 10-20)`.
+---@param path string relative to the session root
+---@param range? integer[] `{ start_line, end_line }`
+---@return string
+function M:format_ref(path, range)
+  local ref = "@" .. path
+  if not range then
+    return ref
+  end
+  if range[1] == range[2] then
+    return ("%s (line %d)"):format(ref, range[1])
+  end
+  return ("%s (lines %d-%d)"):format(ref, range[1], range[2])
 end
 
 ---Whether `line` is a horizontal rule: only "─" characters, then optional spaces.

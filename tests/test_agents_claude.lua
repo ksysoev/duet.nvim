@@ -314,6 +314,19 @@ local ready_cases = {
   { name = "prompt marker without a rule", lines = { "some output", "❯ text" }, ready = false },
 }
 
+T["format_ref()"] = MiniTest.new_set({
+  parametrize = {
+    { "file", { path = "src/a.lua" }, "@src/a.lua" },
+    { "one line", { path = "src/a.lua", range = { 7, 7 } }, "@src/a.lua (line 7)" },
+    { "lines", { path = "src/a.lua", range = { 10, 20 } }, "@src/a.lua (lines 10-20)" },
+    { "absolute path", { path = "/tmp/x.lua" }, "@/tmp/x.lua" },
+  },
+})
+
+T["format_ref()"]["works"] = function(_, args, want)
+  eq(claude():format_ref(args.path, args.range), want)
+end
+
 for _, case in ipairs(ready_cases) do
   T["is_ready()"][case.name] = function()
     eq(claude():is_ready(case.lines), case.ready)
