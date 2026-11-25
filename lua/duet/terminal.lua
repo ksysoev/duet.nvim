@@ -151,45 +151,29 @@ function M.resolve_size(value, total)
   return math.max(1, math.min(size, total))
 end
 
----Size of a split: `value` resolved against `total` (see `resolve_size()`). An absolute
----value is also capped so the other windows keep `keep` cells, plus one for the separator
----or status line between them and the split. A fraction is not capped. Pure.
----@param value number `split.width` or `split.height`
+---Largest size an absolute split may take so the other windows keep `keep` cells, plus
+---one for the separator or status line between them and the split. When `total` is too
+---small for both, the split and the rest share it evenly. Pure.
 ---@param total integer editor columns, or lines available for windows
 ---@param keep integer `split.min_code_width` or `split.min_code_height`
 ---@return integer
-function M.split_size(value, total, keep)
-  local size = M.resolve_size(value, total)
-  if value <= 1 then
-    return size
-  end
-  return math.max(1, math.min(size, total - keep - 1))
+function M.split_cap(total, keep)
+  return math.max(1, total - keep - 1, math.floor((total - 1) / 2))
 end
 
----New size for a split after the editor was resized, or nil to leave it. Pure.
----A fractional split always gets its share. An absolute split that still has the size
----duet last gave it follows `split_size()`, so it shrinks with the editor and grows back.
----A split the user resized by hand keeps its size, unless it no longer leaves room for the
----other windows: then it shrinks to the cap.
+---Size a split should have. A fraction (`value <= 1`) is its share of `total` and is not
+---capped. An absolute size is the user's own size `hand` when they resized the split by
+---hand, otherwise `value`, capped by `split_cap()`. Pure.
 ---@param value number `split.width` or `split.height`
 ---@param total integer editor columns, or lines available for windows
 ---@param keep integer `split.min_code_width` or `split.min_code_height`
----@param current integer the split's size now
----@param last? integer the size duet last gave the split
----@return integer|nil
-function M.split_resize(value, total, keep, current, last)
-  local size = M.split_size(value, total, keep)
-  if size == current then
-    return nil
+---@param hand? integer the size the user gave the split by hand
+---@return integer
+function M.split_target(value, total, keep, hand)
+  if value <= 1 then
+    return M.resolve_size(value, total)
   end
-  if value <= 1 or current == last then
-    return size
-  end
-  local cap = math.max(1, total - keep - 1)
-  if current > cap then
-    return cap
-  end
-  return nil
+  return math.max(1, math.min(hand or math.floor(value), M.split_cap(total, keep)))
 end
 
 ---Cells a border takes on each side. Pure. A list repeats to 8 parts (corners and edges,
@@ -251,9 +235,9 @@ function M.win_config(layout, opts, editor, title)
     end
     return cfg
   elseif layout == "bottom" then
-    return { split = "below", win = -1, height = M.split_size(opts.split.height, lines, opts.split.min_code_height) }
+    return { split = "below", win = -1, height = M.split_target(opts.split.height, lines, opts.split.min_code_height) }
   end
-  return { split = layout, win = -1, width = M.split_size(opts.split.width, columns, opts.split.min_code_width) }
+  return { split = layout, win = -1, width = M.split_target(opts.split.width, columns, opts.split.min_code_width) }
 end
 
 ---The editor area windows can use: the tabline, the command line and a status line are
@@ -295,15 +279,33 @@ local function apply_window_options(win, layout)
   vim.w[win].duet_layout = layout
 end
 
----Record a split's size in `w:duet_size`, so a later resize can tell it from one the user
----made by hand.
+---The size a split's layout sets: "height" for `"bottom"`, "width" for `"right"` and
+---`"left"`, nil for a float or a window that is not a duet terminal.
 ---@param win integer
-local function record_size(win)
+---@return "width"|"height"|nil
+local function split_axis(win)
   local layout = vim.w[win].duet_layout
   if layout == "bottom" then
-    vim.w[win].duet_size = vim.api.nvim_win_get_height(win)
+    return "height"
   elseif layout == "right" or layout == "left" then
-    vim.w[win].duet_size = vim.api.nvim_win_get_width(win)
+    return "width"
+  end
+end
+
+---@param win integer
+---@param axis "width"|"height"
+---@return integer
+local function get_size(win, axis)
+  return axis == "height" and vim.api.nvim_win_get_height(win) or vim.api.nvim_win_get_width(win)
+end
+
+---Record a split's size in `w:duet_size`: the size duet accounts for. A later change to
+---any other size, outside an editor resize, is the user's (see `on_win_resized()`).
+---@param win integer
+local function record_size(win)
+  local axis = split_axis(win)
+  if axis then
+    vim.w[win].duet_size = get_size(win, axis)
   end
 end
 
@@ -330,14 +332,17 @@ local function title(agent)
   return (" %s "):format(agent.name)
 end
 
----On VimResized: centre and size floats again, and size splits as `split_resize()` says:
----a fraction gets its share of the new editor size, an absolute size shrinks to leave room
----for the code and grows back while the user has not resized the split by hand.
+---On VimResized: centre and size floats again, and give splits the size `split_target()`
+---says: a fraction gets its share of the new editor size, an absolute size is capped to
+---leave room for the code and grows back up to the configured size, or to the user's own
+---size once they resized the split by hand. Whatever Neovim did to the split's size during
+---the resize is recorded as duet's, so `on_win_resized()` does not take it for the user's.
 local function relayout()
   local opts = config()
   local editor = editor_size()
   for _, session in pairs(sessions) do
     for _, win in ipairs(vim.fn.win_findbuf(session.buf)) do
+      local axis = split_axis(win)
       if is_float(win) then
         -- Use the border the window has, which a later setup() may have changed in config.
         -- Neovim 0.11 leaves `border` out of the config of a window without one.
@@ -346,22 +351,38 @@ local function relayout()
         local cfg = M.win_config("float", vim.tbl_extend("force", opts, { float = float }), editor)
         cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
         vim.api.nvim_win_set_config(win, cfg)
-      elseif vim.w[win].duet_layout == "bottom" then
-        local current = vim.api.nvim_win_get_height(win)
-        local size =
-          M.split_resize(opts.split.height, editor.lines, opts.split.min_code_height, current, vim.w[win].duet_size)
-        if size then
-          vim.api.nvim_win_set_height(win, size)
-          record_size(win)
+      elseif axis then
+        local hand = vim.w[win].duet_hand
+        local size
+        if axis == "height" then
+          size = M.split_target(opts.split.height, editor.lines, opts.split.min_code_height, hand)
+        else
+          size = M.split_target(opts.split.width, editor.columns, opts.split.min_code_width, hand)
         end
-      elseif vim.w[win].duet_layout then
-        local current = vim.api.nvim_win_get_width(win)
-        local size =
-          M.split_resize(opts.split.width, editor.columns, opts.split.min_code_width, current, vim.w[win].duet_size)
-        if size then
-          vim.api.nvim_win_set_width(win, size)
-          record_size(win)
+        if size ~= get_size(win, axis) then
+          if axis == "height" then
+            vim.api.nvim_win_set_height(win, size)
+          else
+            vim.api.nvim_win_set_width(win, size)
+          end
         end
+        record_size(win)
+      end
+    end
+  end
+end
+
+---On WinResized: a split whose size changed since duet last recorded it was resized by
+---the user (or by something else outside an editor resize), so that size becomes the one
+---the split keeps and grows back to, in `w:duet_hand`.
+local function on_win_resized()
+  for _, win in ipairs(vim.v.event.windows or {}) do
+    local axis = vim.api.nvim_win_is_valid(win) and split_axis(win)
+    if axis and not is_float(win) then
+      local size = get_size(win, axis)
+      if size ~= vim.w[win].duet_size then
+        vim.w[win].duet_hand = size
+        vim.w[win].duet_size = size
       end
     end
   end
@@ -385,6 +406,11 @@ local function ensure_autocmds()
     group = augroup,
     desc = "duet: resize agent terminals",
     callback = relayout,
+  })
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = augroup,
+    desc = "duet: remember agent terminals resized by hand",
+    callback = on_win_resized,
   })
 end
 

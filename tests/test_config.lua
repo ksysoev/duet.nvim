@@ -118,6 +118,11 @@ T["validation error"] = MiniTest.new_set({
       "^terminal.split.min_code_width: expected",
     },
     {
+      "infinite min_code_width",
+      { terminal = { split = { min_code_width = math.huge } } },
+      "^terminal.split.min_code_width: expected",
+    },
+    {
       "fractional min_code_height",
       { terminal = { split = { min_code_height = 0.5 } } },
       "^terminal.split.min_code_height: expected",

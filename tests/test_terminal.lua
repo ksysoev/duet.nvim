@@ -1150,12 +1150,16 @@ T["layout"]["resizing the editor resizes fractional splits only"] = function()
     vim.cmd("doautocmd VimResized")
     local fraction = vim.api.nvim_win_get_width(win)
     require("duet").setup({ agent = "fake", terminal = { layout = "right", split = { width = 30 } } })
-    vim.api.nvim_win_set_width(win, 40)
+    return fraction
+  ]])
+  -- A separate call, so WinResized sees the resize by hand before the editor resize.
+  child.lua("vim.api.nvim_win_set_width(T.current():window(), 40)")
+  local absolute = child.lua([[
     vim.o.columns = 100
     vim.cmd("doautocmd VimResized")
-    return { fraction, vim.api.nvim_win_get_width(win) }
+    return vim.api.nvim_win_get_width(T.current():window())
   ]])
-  eq(widths, { 60, 40 })
+  eq({ widths, absolute }, { 60, 40 })
 end
 
 T["layout"]["the default panel leaves room for code on an 80-column editor"] = function()
@@ -1192,23 +1196,45 @@ end
 
 T["layout"]["a split resized by hand keeps its size until it no longer fits"] = function()
   fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 80 } } })
+  child.lua("_G.win = T.open():window()")
+  -- A separate call, so WinResized sees the resize by hand before the editor resizes.
+  child.lua("vim.api.nvim_win_set_width(win, 40)")
+  local widths = {}
+  for _, columns in ipairs({ 100, 200, 50, 200 }) do
+    child.o.columns = columns
+    widths[#widths + 1] = child.lua_get("vim.api.nvim_win_get_width(win)")
+  end
+  eq(widths, { 40, 40, 29, 40 })
+end
+
+T["layout"]["a split Neovim shrinks by itself grows back"] = MiniTest.new_set({
+  parametrize = {
+    { "min_code_width = 0", { split = { width = 80, min_code_width = 0 } }, "", 50 },
+    { "winminwidth above min_code_width", {}, "vim.o.winwidth = 30; vim.o.winminwidth = 30", 90 },
+  },
+})
+
+T["layout"]["a split Neovim shrinks by itself grows back"]["%s"] = function(_, terminal, setup, small)
+  fake("fake", CAT, {}, { terminal = terminal })
+  child.lua(setup)
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+  child.o.columns = small
+  local shrunk = child.lua_get("{ vim.api.nvim_win_get_width(win), vim.api.nvim_win_get_width(code) }")
+  child.o.columns = 200
+  eq(shrunk[1] < 80, true)
+  eq(shrunk[1] + shrunk[2] + 1, small)
+  eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 80)
+end
+
+T["layout"]["a tiny editor shares its width with the panel"] = function()
+  fake("fake", CAT)
+  child.o.columns = 20
   local widths = child.lua([[
+    local code = vim.api.nvim_get_current_win()
     local s = T.open()
-    local win = s:window()
-    vim.api.nvim_win_set_width(win, 40)
-    local out = {}
-    vim.o.columns = 100
-    vim.cmd("doautocmd VimResized")
-    out[1] = vim.api.nvim_win_get_width(win)
-    vim.o.columns = 200
-    vim.cmd("doautocmd VimResized")
-    out[2] = vim.api.nvim_win_get_width(win)
-    vim.o.columns = 50
-    vim.cmd("doautocmd VimResized")
-    out[3] = vim.api.nvim_win_get_width(win)
-    return out
+    return { panel = vim.api.nvim_win_get_width(s:window()), code = vim.api.nvim_win_get_width(code) }
   ]])
-  eq(widths, { 40, 40, 29 })
+  eq(widths, { panel = 9, code = 10 })
 end
 
 T["layout"]["shrinking the editor shrinks an absolute bottom split"] = function()
@@ -1522,43 +1548,45 @@ for _, case in ipairs(message_cases) do
   end
 end
 
-local split_size_cases = {
+-- args: total, keep
+local split_cap_cases = {
+  { name = "leaves keep plus the separator", args = { 80, 20 }, expected = 59 },
+  { name = "large editor", args = { 200, 20 }, expected = 179 },
+  { name = "keep 0 leaves the separator", args = { 80, 0 }, expected = 79 },
+  { name = "at the crossover", args = { 41, 20 }, expected = 20 },
+  { name = "too small for both shares evenly", args = { 20, 20 }, expected = 9 },
+  { name = "lines too small for both share evenly", args = { 8, 5 }, expected = 3 },
+  { name = "a single cell", args = { 1, 20 }, expected = 1 },
+}
+
+T["split_cap()"] = MiniTest.new_set()
+for _, case in ipairs(split_cap_cases) do
+  T["split_cap()"][case.name] = function()
+    h.reset_modules()
+    eq(require("duet.terminal").split_cap(unpack(case.args)), case.expected)
+  end
+end
+
+-- args: value, total, keep, hand
+local split_target_cases = {
+  { name = "fraction gets its share", args = { 0.5, 120, 20 }, expected = 60 },
+  { name = "fraction ignores a hand size", args = { 0.5, 120, 20, 40 }, expected = 60 },
   { name = "fraction is not capped", args = { 0.9, 30, 20 }, expected = 27 },
   { name = "absolute fits", args = { 80, 200, 20 }, expected = 80 },
   { name = "absolute capped", args = { 80, 80, 20 }, expected = 59 },
   { name = "absolute exactly at the cap", args = { 59, 80, 20 }, expected = 59 },
-  { name = "no room left gives 1", args = { 80, 15, 20 }, expected = 1 },
-  { name = "keep 0 leaves the separator", args = { 80, 80, 0 }, expected = 79 },
+  { name = "absolute on a tiny editor shares evenly", args = { 80, 20, 20 }, expected = 9 },
+  { name = "hand size below the cap", args = { 80, 200, 20, 40 }, expected = 40 },
+  { name = "hand size capped", args = { 80, 50, 20, 40 }, expected = 29 },
+  { name = "hand size wider than configured", args = { 80, 200, 20, 120 }, expected = 120 },
+  { name = "hand size of 1 is not a fraction", args = { 80, 200, 20, 1 }, expected = 1 },
 }
 
-T["split_size()"] = MiniTest.new_set()
-for _, case in ipairs(split_size_cases) do
-  T["split_size()"][case.name] = function()
+T["split_target()"] = MiniTest.new_set()
+for _, case in ipairs(split_target_cases) do
+  T["split_target()"][case.name] = function()
     h.reset_modules()
-    eq(require("duet.terminal").split_size(unpack(case.args)), case.expected)
-  end
-end
-
--- args: value, total, keep, current, last
-local split_resize_cases = {
-  { name = "fraction gets its share", args = { 0.5, 120, 20, 40, 40 }, expected = 60 },
-  { name = "fraction already right", args = { 0.5, 120, 20, 60, 60 }, expected = nil },
-  { name = "absolute shrinks when too wide", args = { 80, 90, 20, 80, 80 }, expected = 69 },
-  { name = "hand-resized shrinks when too wide", args = { 80, 50, 20, 40, 80 }, expected = 29 },
-  { name = "hand-resized wider than configured shrinks to the cap", args = { 80, 110, 20, 100, 80 }, expected = 89 },
-  { name = "hand-resized wider than configured keeps its size when it fits", args = { 30, 100, 20, 40, 60 } },
-  { name = "hand-resized keeps its size when it fits", args = { 80, 100, 20, 40, 80 }, expected = nil },
-  { name = "grows back while duet's size", args = { 80, 200, 20, 69, 69 }, expected = 80 },
-  { name = "grows back only to the cap", args = { 80, 95, 20, 69, 69 }, expected = 74 },
-  { name = "hand-resized does not grow", args = { 80, 200, 20, 50, 69 }, expected = nil },
-  { name = "no last size does not grow", args = { 80, 200, 20, 50, nil }, expected = nil },
-}
-
-T["split_resize()"] = MiniTest.new_set()
-for _, case in ipairs(split_resize_cases) do
-  T["split_resize()"][case.name] = function()
-    h.reset_modules()
-    eq(require("duet.terminal").split_resize(unpack(case.args, 1, 5)), case.expected)
+    eq(require("duet.terminal").split_target(unpack(case.args, 1, 4)), case.expected)
   end
 end
 

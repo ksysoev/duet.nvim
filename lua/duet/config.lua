@@ -78,7 +78,7 @@ local function validate_size(v)
 end
 
 local function validate_count(v)
-  return type(v) == "number" and v >= 0 and v == math.floor(v)
+  return type(v) == "number" and v >= 0 and v < math.huge and v == math.floor(v)
 end
 
 -- Border names differ between Neovim versions, so any string passes here; nvim_open_win

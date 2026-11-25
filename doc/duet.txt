@@ -142,13 +142,22 @@ terminal ~
         An absolute size is capped so the rest of the editor keeps
         `min_code_width` columns (`min_code_height` lines for `"bottom"`),
         plus the separator. On an 80-column editor the default panel is 59
-        columns wide and the code gets 20. The cap is applied when the split
-        opens and when the editor is resized: a split that no longer leaves
-        that room shrinks, and grows back toward its size when the editor
-        grows. A split you resized by hand keeps its size unless it no longer
-        fits. Fractional sizes are not capped. Set a minimum to `0` to leave
-        only what 'winminwidth' and 'winminheight' require, which Neovim
-        always keeps.
+        columns wide and the code gets 20. When the editor is too small for
+        both, the split and the rest share it evenly: on a 20-column editor
+        the panel gets 9 columns and the code 10. Fractional sizes are not
+        capped.
+
+        The cap is applied when the split opens and when the editor is
+        resized: a split that no longer leaves that room shrinks, and grows
+        back toward its size when the editor grows. If you resize the split
+        by hand, that size is the one it keeps, shrinks from and grows back
+        to, until the split is closed. Any change to its size other than an
+        editor resize counts as yours.
+
+        Set a minimum to `0` to leave only what 'winminwidth' and
+        'winminheight' require, which Neovim always keeps. Only the editor's
+        size is counted: other windows beside the code, such as a file tree
+        with 'winfixwidth', are not taken off the room the code keeps.
                                           *duet-config-terminal-close_on_exit*
     close_on_exit ~
         `string` (default: `"success"`)
