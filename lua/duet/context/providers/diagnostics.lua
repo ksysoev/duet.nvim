@@ -45,7 +45,8 @@ local function render(ctx, diagnostics)
       paths[d.bufnr] = path and context.relpath(ctx, path) or "[No Name]"
     end
   end
-  diagnostics = vim.deepcopy(diagnostics)
+  -- Only the order changes, so a shallow copy is enough.
+  diagnostics = vim.list_slice(diagnostics)
   table.sort(diagnostics, function(a, b)
     return before(a, b, paths)
   end)
