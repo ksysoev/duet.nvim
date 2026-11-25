@@ -143,10 +143,12 @@ terminal ~
         `min_code_width` columns (`min_code_height` lines for `"bottom"`),
         plus the separator. On an 80-column editor the default panel is 59
         columns wide and the code gets 20. On an editor narrower than twice
-        the minimum plus one (41 columns with the defaults), the split never
-        gets less than the rest: they share it evenly, so a 30-column editor
-        gives the panel 14 columns and the code 15. Fractional sizes are not
-        capped.
+        the minimum plus one (41 columns with the defaults), the split and
+        the rest share it evenly, the rest getting any odd column, so a
+        30-column editor gives the panel 14 columns and the code 15. Moving
+        into the code window then lets Neovim widen it to 'winwidth', taking
+        columns from the panel; the panel grows back when the editor does.
+        Fractional sizes are not capped.
 
         The cap is applied when the split opens and when the editor is
         resized: a split that no longer leaves that room shrinks, and grows
@@ -154,8 +156,8 @@ terminal ~
         by hand, that size is the one it keeps, shrinks from and grows back
         to, until the split is closed or `setup()` changes `width` or
         `height`. Any change to its size made apart from an editor resize
-        counts as yours; one made in the same instant as an editor resize,
-        e.g. by a script, is not noticed.
+        counts as yours; one made in the same instant as an editor resize
+        or as moving to another window, e.g. by a script, is not noticed.
 
         Set a minimum to `0` to leave only what 'winminwidth' and
         'winminheight' require, which Neovim always keeps. Only the editor's

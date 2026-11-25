@@ -27,6 +27,9 @@ local id_counter = 0
 local use_counter = 0
 ---@type integer|nil
 local augroup
+-- Set on WinEnter when Neovim is about to enlarge the window entered to 'winwidth' or
+-- 'winheight', and cleared by the WinResized that follows: that resize is not the user's.
+local enlarging = false
 
 local FILETYPE = "duet_terminal"
 
@@ -274,10 +277,13 @@ local function apply_window_options(win, layout)
   wo.cursorline = false
   wo.colorcolumn = ""
   wo.statuscolumn = ""
-  -- Turn the fixed sizes off elsewhere: a buffer put in a window takes over the window's
-  -- local values, so one a split had would otherwise stay with a window of the user's.
-  wo.winfixheight = layout == "bottom"
-  wo.winfixwidth = layout == "right" or layout == "left"
+  -- Only a split fixes its size. Any other window keeps its own values, e.g. a sidebar of
+  -- the user's that shows the terminal.
+  if layout == "bottom" then
+    wo.winfixheight = true
+  elseif layout == "right" or layout == "left" then
+    wo.winfixwidth = true
+  end
   vim.w[win].duet_layout = layout
 end
 
@@ -381,19 +387,36 @@ end
 ---the user (or by something else outside an editor resize), so that size becomes the one
 ---the split keeps and grows back to, in `w:duet_hand`. `w:duet_hand_for` records the size
 ---option it was made under. Only windows that show a duet terminal count: a panel the user
----put another buffer in (e.g. with :edit) is not tracked.
+---put another buffer in (e.g. with :edit) is not tracked. A resize that comes with
+---entering a window is Neovim's ('winwidth', 'winheight'), so it is recorded as duet's.
 local function on_win_resized()
   for _, win in ipairs(vim.v.event.windows or {}) do
     local axis = vim.api.nvim_win_is_valid(win) and split_axis(win)
     if axis and not is_float(win) and vim.b[vim.api.nvim_win_get_buf(win)].duet_session then
       local size = get_size(win, axis)
-      if size ~= vim.w[win].duet_size then
+      if enlarging then
+        record_size(win)
+      elseif size ~= vim.w[win].duet_size then
         vim.w[win].duet_hand = size
         vim.w[win].duet_hand_for = config().split[axis]
         vim.w[win].duet_size = size
       end
     end
   end
+  enlarging = false
+end
+
+---On WinEnter, before Neovim sizes the window entered: whether it will enlarge it, which
+---it does for a window narrower than 'winwidth' or lower than 'winheight' whose size is
+---not fixed.
+local function on_win_enter()
+  local win = vim.api.nvim_get_current_win()
+  if is_float(win) then
+    return
+  end
+  local wo = vim.wo[win]
+  enlarging = (vim.api.nvim_win_get_width(win) < vim.o.winwidth and not wo.winfixwidth)
+    or (vim.api.nvim_win_get_height(win) < vim.o.winheight and not wo.winfixheight)
 end
 
 -- Sessions ------------------------------------------------------------------
@@ -419,6 +442,11 @@ local function ensure_autocmds()
     group = augroup,
     desc = "duet: remember agent terminals resized by hand",
     callback = on_win_resized,
+  })
+  vim.api.nvim_create_autocmd("WinEnter", {
+    group = augroup,
+    desc = "duet: tell window enlargement from resizes by hand",
+    callback = on_win_enter,
   })
 end
 
@@ -471,14 +499,9 @@ local function empty_buffer(except)
 end
 
 ---Drop the split state duet keeps on a window (see `record_size()` and `on_win_resized()`),
----once its terminal has left it, so the window is not sized as a split later. The buffer
----now in the window took over the split's 'winfixwidth' or 'winfixheight', so turn it off.
+---once its terminal has left it, so the window is not sized as a split later.
 ---@param win integer
 local function forget_window(win)
-  if split_axis(win) then
-    vim.wo[win][0].winfixwidth = false
-    vim.wo[win][0].winfixheight = false
-  end
   vim.w[win].duet_layout = nil
   vim.w[win].duet_size = nil
   vim.w[win].duet_hand = nil
@@ -501,9 +524,20 @@ local function close_window(win, buf)
   if alt <= 0 or alt == buf or not vim.bo[alt].buflisted then
     alt = empty_buffer(buf)
   end
+  -- A buffer put in a window takes over the local values of the one it replaces, unless it
+  -- was shown there before. Turn a split's fixed size off first, so neither the buffer put
+  -- here nor the terminal, if it comes back to this window, keeps it.
+  local axis = split_axis(win)
+  if axis then
+    vim.wo[win][0].winfixwidth = false
+    vim.wo[win][0].winfixheight = false
+  end
   local ok, err = pcall(vim.api.nvim_win_set_buf, win, alt)
   if ok then
     forget_window(win)
+  elseif axis then
+    vim.wo[win][0].winfixwidth = axis == "width"
+    vim.wo[win][0].winfixheight = axis == "height"
   end
   return ok, err
 end

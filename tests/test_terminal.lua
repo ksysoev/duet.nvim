@@ -1141,7 +1141,7 @@ T["layout"]["restart keeps the terminal's window options"]["%s"] = function(layo
   eq(info.fix, layout == "right")
 end
 
-T["layout"]["resizing the editor resizes fractional splits only"] = function()
+T["layout"]["resizing the editor resizes fractional splits and keeps hand sizes"] = function()
   fake("fake", CAT, {}, { terminal = { layout = "right", split = { width = 0.5 } } })
   local widths = child.lua([[
     local s = T.open()
@@ -1276,6 +1276,50 @@ T["layout"]["a window the terminal left is not a split any more"] = function()
   eq(child.lua_get("{ vim.w[win].duet_layout or false, vim.wo[win].winfixwidth }"), { false, false })
   child.o.columns = 150
   eq(child.lua_get("vim.api.nvim_win_get_width(win) ~= 80"), true)
+end
+
+T["layout"]["a window enlarged on enter is not a hand size"] = MiniTest.new_set({
+  parametrize = {
+    { "defaults on a narrow editor", {}, 30 },
+    { "min_code_width below winwidth", { split = { min_code_width = 10 } }, 100 },
+  },
+})
+
+T["layout"]["a window enlarged on enter is not a hand size"]["%s"] = function(_, terminal, columns)
+  fake("fake", CAT, {}, { terminal = terminal })
+  child.o.columns = columns
+  -- open() focuses the panel; moving back makes Neovim widen the code to 'winwidth'.
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+  child.lua("vim.api.nvim_set_current_win(code)")
+  eq(child.lua_get("{ vim.api.nvim_win_get_width(code), vim.w[win].duet_hand or false }"), { 20, false })
+  child.o.columns = 200
+  eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 80)
+end
+
+T["layout"]["a resize by hand after an enlargement is still noticed"] = function()
+  fake("fake", CAT)
+  child.o.columns = 30
+  child.lua("_G.code = vim.api.nvim_get_current_win(); _G.win = T.open():window()")
+  -- Neovim widens the code to 'winwidth' and takes the columns from the panel.
+  child.lua("vim.api.nvim_set_current_win(code)")
+  eq(child.lua_get("{ vim.api.nvim_win_get_width(win), vim.w[win].duet_hand or false }"), { 9, false })
+  child.lua("vim.api.nvim_win_set_width(win, 5)")
+  eq(child.lua_get("vim.w[win].duet_hand or false"), 5)
+end
+
+T["layout"]["restarting in a sidebar of the user's keeps its fixed width"] = function()
+  fake("fake", CAT)
+  child.lua([[
+    vim.cmd("vsplit")
+    _G.side = vim.api.nvim_get_current_win()
+    vim.wo[side].winfixwidth = true
+    local s = T.open()
+    local buf = s.buf
+    s:hide()
+    vim.api.nvim_win_set_buf(side, buf)
+    assert(T.restart())
+  ]])
+  eq(child.lua_get("{ vim.wo[side].winfixwidth, vim.w[side].duet_layout or false }"), { true, false })
 end
 
 T["layout"]["a panel showing another buffer is not tracked"] = function()
