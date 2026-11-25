@@ -1226,6 +1226,45 @@ T["layout"]["a split Neovim shrinks by itself grows back"]["%s"] = function(_, t
   eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 80)
 end
 
+T["layout"]["restarting in a window of the user's does not make it a split"] = function()
+  fake("fake", CAT)
+  child.lua([[
+    _G.left = vim.api.nvim_get_current_win()
+    vim.cmd("vsplit")
+    _G.right = vim.api.nvim_get_current_win()
+    local s = T.open()
+    local buf = s.buf
+    s:hide()
+    vim.api.nvim_win_set_buf(left, buf)
+    assert(T.restart())
+  ]])
+  local info = child.lua_get([[{
+    layout = vim.w[left].duet_layout or false,
+    fix = vim.wo[left].winfixwidth,
+    terminal = vim.api.nvim_win_get_buf(left) == T.current().buf,
+  }]])
+  eq(info, { layout = false, fix = false, terminal = true })
+  -- duet does not size the window as a panel, so the other one is not squeezed.
+  child.o.columns = 150
+  eq(child.lua_get("vim.api.nvim_win_get_width(left) ~= 80"), true)
+  child.o.columns = 60
+  eq(child.lua_get("vim.api.nvim_win_get_width(right) > 1"), true)
+end
+
+T["layout"]["a hand size gives way to a size set with setup()"] = MiniTest.new_set({
+  parametrize = { { "from a fraction", 0.5 }, { "from an absolute size", 80 } },
+})
+
+T["layout"]["a hand size gives way to a size set with setup()"]["%s"] = function(_, width)
+  fake("fake", CAT, {}, { terminal = { split = { width = width } } })
+  child.lua("_G.win = T.open():window()")
+  -- A separate call, so WinResized sees the resize by hand before the editor resizes.
+  child.lua("vim.api.nvim_win_set_width(win, 30)")
+  child.lua([[require("duet").setup({ agent = "fake", terminal = { split = { width = 100 } } })]])
+  child.o.columns = 199
+  eq(child.lua_get("vim.api.nvim_win_get_width(win)"), 100)
+end
+
 T["layout"]["a tiny editor shares its width with the panel"] = function()
   fake("fake", CAT)
   child.o.columns = 20
@@ -1399,6 +1438,13 @@ local geometry_cases = {
     expected = { split = "below", win = -1, height = 30 },
   },
   {
+    name = "right split without min_code_width leaves the separator",
+    layout = "right",
+    opts = { float = OPTS.float, split = { width = 200, height = 0.4 } },
+    editor = { columns = 120 },
+    expected = { split = "right", win = -1, width = 119 },
+  },
+  {
     name = "right split, fraction, not capped on a small editor",
     layout = "right",
     opts = { float = OPTS.float, split = { width = 0.9, height = 0.4, min_code_width = 20, min_code_height = 5 } },
@@ -1557,6 +1603,7 @@ local split_cap_cases = {
   { name = "too small for both shares evenly", args = { 20, 20 }, expected = 9 },
   { name = "lines too small for both share evenly", args = { 8, 5 }, expected = 3 },
   { name = "a single cell", args = { 1, 20 }, expected = 1 },
+  { name = "keep defaults to 0", args = { 80 }, expected = 79 },
 }
 
 T["split_cap()"] = MiniTest.new_set()

@@ -151,8 +151,10 @@ terminal ~
         resized: a split that no longer leaves that room shrinks, and grows
         back toward its size when the editor grows. If you resize the split
         by hand, that size is the one it keeps, shrinks from and grows back
-        to, until the split is closed. Any change to its size other than an
-        editor resize counts as yours.
+        to, until the split is closed or `setup()` changes `width` or
+        `height`. Any change to its size made apart from an editor resize
+        counts as yours; one made in the same instant as an editor resize,
+        e.g. by a script, is not noticed.
 
         Set a minimum to `0` to leave only what 'winminwidth' and
         'winminheight' require, which Neovim always keeps. Only the editor's

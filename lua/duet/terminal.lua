@@ -155,9 +155,10 @@ end
 ---one for the separator or status line between them and the split. When `total` is too
 ---small for both, the split and the rest share it evenly. Pure.
 ---@param total integer editor columns, or lines available for windows
----@param keep integer `split.min_code_width` or `split.min_code_height`
+---@param keep? integer `split.min_code_width` or `split.min_code_height` (default 0)
 ---@return integer
 function M.split_cap(total, keep)
+  keep = keep or 0
   return math.max(1, total - keep - 1, math.floor((total - 1) / 2))
 end
 
@@ -166,7 +167,7 @@ end
 ---hand, otherwise `value`, capped by `split_cap()`. Pure.
 ---@param value number `split.width` or `split.height`
 ---@param total integer editor columns, or lines available for windows
----@param keep integer `split.min_code_width` or `split.min_code_height`
+---@param keep? integer `split.min_code_width` or `split.min_code_height` (default 0)
 ---@param hand? integer the size the user gave the split by hand
 ---@return integer
 function M.split_target(value, total, keep, hand)
@@ -256,9 +257,11 @@ end
 
 ---Set the terminal's window options. They are local to the window's current buffer
 ---(`vim.wo[win][0]`, like :setlocal), so call this again after putting a new buffer in
----the window. `w:duet_layout` records the layout for resizing.
+---the window. `w:duet_layout` records the layout for resizing. Without a layout, e.g. a
+---window of the user's that shows the terminal, only the display options are set, so
+---duet does not size the window or fix its width.
 ---@param win integer
----@param layout "float"|"right"|"left"|"bottom"
+---@param layout? "float"|"right"|"left"|"bottom"
 local function apply_window_options(win, layout)
   local wo = vim.wo[win][0]
   wo.number = false
@@ -273,7 +276,7 @@ local function apply_window_options(win, layout)
   wo.statuscolumn = ""
   if layout == "bottom" then
     wo.winfixheight = true
-  elseif layout ~= "float" then
+  elseif layout == "right" or layout == "left" then
     wo.winfixwidth = true
   end
   vim.w[win].duet_layout = layout
@@ -352,12 +355,15 @@ local function relayout()
         cfg.title, cfg.title_pos, cfg.border = nil, nil, nil
         vim.api.nvim_win_set_config(win, cfg)
       elseif axis then
-        local hand = vim.w[win].duet_hand
+        local value = opts.split[axis]
+        -- A hand size counts only under the size option it was made with: after setup()
+        -- changes that option, the split takes the new size.
+        local hand = vim.w[win].duet_hand_for == value and vim.w[win].duet_hand or nil
         local size
         if axis == "height" then
-          size = M.split_target(opts.split.height, editor.lines, opts.split.min_code_height, hand)
+          size = M.split_target(value, editor.lines, opts.split.min_code_height, hand)
         else
-          size = M.split_target(opts.split.width, editor.columns, opts.split.min_code_width, hand)
+          size = M.split_target(value, editor.columns, opts.split.min_code_width, hand)
         end
         if size ~= get_size(win, axis) then
           if axis == "height" then
@@ -374,7 +380,8 @@ end
 
 ---On WinResized: a split whose size changed since duet last recorded it was resized by
 ---the user (or by something else outside an editor resize), so that size becomes the one
----the split keeps and grows back to, in `w:duet_hand`.
+---the split keeps and grows back to, in `w:duet_hand`. `w:duet_hand_for` records the size
+---option it was made under.
 local function on_win_resized()
   for _, win in ipairs(vim.v.event.windows or {}) do
     local axis = vim.api.nvim_win_is_valid(win) and split_axis(win)
@@ -382,6 +389,7 @@ local function on_win_resized()
       local size = get_size(win, axis)
       if size ~= vim.w[win].duet_size then
         vim.w[win].duet_hand = size
+        vim.w[win].duet_hand_for = config().split[axis]
         vim.w[win].duet_size = size
       end
     end
@@ -913,7 +921,10 @@ function Session.new(agent, opts)
   if win then
     prev_buf = vim.api.nvim_win_get_buf(win)
     vim.api.nvim_win_set_buf(win, self.buf)
-    apply_window_options(win, vim.w[win].duet_layout or (is_float(win) and "float" or config().layout))
+    -- A window duet opened keeps its layout. Any other window, e.g. one of the user's that
+    -- showed the terminal, is not made a split: duet would size it as one.
+    apply_window_options(win, vim.w[win].duet_layout or (is_float(win) and "float" or nil))
+    record_size(win)
   elseif not opts.hidden then
     local open_err
     win, open_err = open_window(self.buf, title(agent))
