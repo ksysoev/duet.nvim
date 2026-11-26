@@ -151,7 +151,8 @@ local function code_window()
   return win
 end
 
-local VISUAL_MODES = { v = "char", V = "line", ["\22"] = "block" }
+-- Visual and Select modes (mode() values), and the kind of selection each makes.
+local VISUAL_MODES = { v = "char", V = "line", ["\22"] = "block", s = "char", S = "line", ["\19"] = "block" }
 
 ---A position `{ line, col }` (1-based) from getpos(), with the column moved back onto the
 ---line: in visual mode the cursor can sit just past the last character (`v$`).

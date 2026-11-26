@@ -666,6 +666,19 @@ C["a block without $ is not to_end"] = function()
   eq(ctx().range.to_end, nil)
 end
 
+C["a selection in Select mode"] = function()
+  child.lua([[
+    vim.keymap.set("s", "<F6>", function()
+      _G.ctx = require("duet.context").capture()
+      require("duet.context").leave_visual()
+    end)
+  ]])
+  child.api.nvim_win_set_cursor(0, { 1, 0 })
+  child.type_keys("gh", "<Right>", "<F6>")
+  eq(ctx().range, { start_line = 1, end_line = 1, mode = "char", start_col = 1, end_col = 2 })
+  eq(child.fn.mode(), "n")
+end
+
 C["selection made backwards, from Lua"] = function()
   child.api.nvim_win_set_cursor(0, { 2, 2 })
   child.type_keys("v", "k", "<F3>")
