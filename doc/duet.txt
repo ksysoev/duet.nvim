@@ -849,14 +849,14 @@ overwritten: Neovim asks what to do, as for any file changed outside it
 after each write.
 
 So that a key you type does not answer that question, a buffer that would
-ask (unsaved changes, a file created since, or 'autoread' off) is not
-checked while you type: in
+ask (unsaved changes, a file created since or deleted, or 'autoread' off)
+is not checked while you type: in
 the agent's terminal, Insert or Replace mode, or after an operator. It is
 checked when the mode changes, e.g. when you leave terminal mode. Buffers
 that reload without asking are checked at once. Any check that would land
 while the command line, its window or a prompt is open waits until it is
 closed. A check that fails, e.g. because of an error in a |FileChangedShell|
-autocommand, is reported once and not retried.
+autocommand, is reported and not retried until the file changes again.
 
 duet also checks the watched buffers when you leave the agent's terminal
 mode (|TermLeave|) and when Neovim gains focus (|FocusGained|), so a change

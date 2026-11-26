@@ -23,6 +23,7 @@ local M = {}
 ---@field pending table<string, true> directories to check
 ---@field timer uv.uv_timer_t|nil debounce timer while active
 ---@field deadline integer|nil loop time (ms) by which the pending directories are checked
+---@field not_before integer|nil loop time (ms) before which no flush runs: the editor was busy
 ---@field poll uv.uv_timer_t|nil polls the missing directories while there are any
 ---@field augroup integer|nil autocmds while active
 ---@field saved_autoread boolean|nil global 'autoread' before duet turned it on, nil if untouched
@@ -118,14 +119,16 @@ end
 
 ---Whether :checktime on a changed `buf` would ask rather than reload it: it has unsaved
 ---changes (W12), its file was created since it was last seen (W13, even with
----'autoread'), or 'autoread' is off for it (W11).
+---'autoread'), its file is gone (E211, which pauses the editor for a second), or
+---'autoread' is off for it (W11).
 ---@param buf integer
 ---@return boolean
 local function would_prompt(buf)
   if vim.bo[buf].modified then
     return true
   end
-  if state.existed[buf] == false and file_exists(buf) then
+  local existed = state.existed[buf]
+  if existed ~= nil and existed ~= file_exists(buf) then
     return true
   end
   -- 'autoread' is global-local: the buffer's value is nil unless set with :setlocal.
@@ -195,12 +198,18 @@ local function debounce()
   if not state.deadline then
     state.deadline = now + math.max(wait, MAX_WAIT_MS)
   end
-  arm(math.max(0, math.min(wait, state.deadline - now)))
+  local delay = math.max(0, math.min(wait, state.deadline - now))
+  if state.not_before then
+    delay = math.max(delay, state.not_before - now)
+  end
+  arm(delay)
 end
 
----Try a check that could not run again later.
+---Try a check that could not run again later. Changes meanwhile don't bring it forward.
 local function retry()
-  arm(math.max(config().debounce_ms, RETRY_MS))
+  local delay = math.max(config().debounce_ms, RETRY_MS)
+  state.not_before = vim.uv.now() + delay
+  arm(delay)
 end
 
 ---Start watching `dir`. A failure (e.g. the inotify limit) is logged once: the directory
@@ -350,6 +359,8 @@ local function check(dirs)
       if typing and would_prompt(buf) then
         state.pending[dir] = true
       else
+        -- Read before the check: an autocmd it runs may wipe the buffer.
+        local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":~:.")
         local ok, err = pcall(vim.cmd.checktime, buf)
         if vim.api.nvim_buf_is_valid(buf) then
           state.existed[buf] = file_exists(buf)
@@ -361,7 +372,6 @@ local function check(dirs)
             state.pending[dir] = true
             again = true
           else
-            local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":~:.")
             require("duet.util").notify(("watch: cannot check %s: %s"):format(name, err), vim.log.levels.WARN)
           end
         end
@@ -386,6 +396,7 @@ function M.flush()
   local dirs = state.pending
   state.pending = {}
   state.deadline = nil
+  state.not_before = nil
   M.sync()
   check(dirs)
 end
@@ -499,6 +510,7 @@ function M.stop()
   state.existed = {}
   state.pending = {}
   state.deadline = nil
+  state.not_before = nil
   update_poll()
   if state.timer then
     state.timer:stop()
