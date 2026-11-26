@@ -232,8 +232,10 @@ function M.capture(opts)
     range = command_range(buf, opts, mode)
   end
 
+  -- The session the text will go to, as send() picks it: references are relative to its
+  -- root, or to the root a session started for the send would get.
   local terminal = require("duet.terminal")
-  local session = terminal.current()
+  local session = terminal.target(opts.agent)
   local agent
   if opts.agent then
     agent = require("duet.agents").get(opts.agent)
@@ -242,8 +244,7 @@ function M.capture(opts)
   else
     agent = require("duet.agents").get()
   end
-  -- The code window is in the current tab, so its number is enough for getcwd().
-  local cwd = session and session.root or terminal.root(vim.fn.getcwd(vim.fn.win_id2win(win)))
+  local cwd = session and session.root or terminal.root()
   return {
     buf = buf,
     win = win,

@@ -730,6 +730,38 @@ C["from a terminal, finds a code window that is not the previous one"] = functio
   eq(ctx().same_win, true)
 end
 
+C["paths are relative to the session the text goes to"] = function()
+  local other = h.tmp_git_repo({ ["b.lua"] = "x" })
+  child.lua(
+    [[
+    local other = ...
+    require("duet.agents").register({
+      name = "fake",
+      cmd = { "sh", "-c", "sleep 30" },
+      capabilities = { mcp = false, plan_hook = false, system_prompt = false },
+      launch = function(self) return { argv = vim.deepcopy(self.cmd), env = {}, files = {} } end,
+    })
+    require("duet").setup({ agent = "fake" })
+    _G.session = assert(require("duet.terminal").ensure(nil, { show = true }))
+    -- Another project in a window of its own, with the agent's terminal still shown.
+    vim.cmd("wincmd p | vsplit")
+    vim.cmd.lcd(other)
+    vim.cmd.edit("b.lua")
+    local ctx = require("duet.context").capture()
+    local claude = require("duet.context").capture({ agent = "claude" })
+    _G.got = {
+      default = { ctx.cwd == _G.session.root, ctx.agent.name, require("duet.context").get("file", ctx).text },
+      claude = { claude.cwd == vim.fn.getcwd(), claude.agent.name },
+    }
+  ]],
+    { other }
+  )
+  -- The visible session is the one :Duet send would use, so b.lua is outside its root.
+  eq(child.lua_get("_G.got.default"), { true, "fake", vim.fs.joinpath(other, "b.lua") })
+  -- No claude session for this project: one would start here.
+  eq(child.lua_get("_G.got.claude"), { true, "claude" })
+end
+
 C["uses the agent asked for"] = function()
   child.lua([[
     require("duet.agents").register({

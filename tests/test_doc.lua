@@ -34,6 +34,7 @@ T["helptags build without errors"] = function()
     "duet.send()",
     "duet-config-send",
     "duet.terminal.ensure()",
+    "duet.terminal.target()",
     "duet-context",
     "duet-context-providers",
     "duet-context-ctx",

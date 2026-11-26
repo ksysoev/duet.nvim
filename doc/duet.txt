@@ -530,6 +530,12 @@ require("duet.terminal").current()                  *duet.terminal.current()*
     methods `show()`, `hide()`, `focus()`, `toggle()`, `restart()`, `stop()`
     and `is_visible()`.
 
+require("duet.terminal").target([{agent}])            *duet.terminal.target()*
+    Return the session that commands such as |:Duet-send| act on, or `nil`:
+    {agent}'s session for the current project, or without {agent} the
+    session shown in the current tab, else |duet.terminal.current()|. Never
+    starts a session.
+
 require("duet.terminal").get({id})                      *duet.terminal.get()*
     Return the session with id {id} (see `b:duet_session`), or `nil`.
 
