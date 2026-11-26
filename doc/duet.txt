@@ -207,7 +207,8 @@ terminal ~
         terminal mode, `gf` and `<CR>` open a link, `]l` and `[l` move
         between links)
         Buffer-local mappings in the terminal, keyed by {lhs}. Your keys
-        are added to the defaults. Actions:
+        are added to the defaults, and replace a default for the same key
+        however it is spelled (`<cr>` replaces `<CR>`). Actions:
         - `"normal_mode"`: leave |Terminal-mode| (terminal mode only).
         - `"hide"`: hide the terminal (terminal and normal mode).
         - `"open_link"`: open the file link under the cursor (normal

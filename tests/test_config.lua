@@ -45,6 +45,26 @@ local merge_cases = {
     end,
   },
   {
+    name = "terminal keys replace a default spelled differently",
+    opts = { terminal = { keys = { ["<cr>"] = false, ["<C-Q>"] = "hide" } } },
+    check = function(c)
+      eq(c.terminal.keys, {
+        ["<C-Q>"] = "hide",
+        ["<cr>"] = false,
+        gf = "open_link",
+        ["]l"] = "next_link",
+        ["[l"] = "prev_link",
+      })
+    end,
+  },
+  {
+    name = "terminal keys spelled like a default replace it",
+    opts = { terminal = { keys = { ["<CR>"] = "hide" } } },
+    check = function(c)
+      eq(c.terminal.keys["<CR>"], "hide")
+    end,
+  },
+  {
     name = "scalar overrides",
     opts = { agent = "other", log_level = "debug" },
     check = function(c)

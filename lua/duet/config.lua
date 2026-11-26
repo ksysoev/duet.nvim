@@ -297,6 +297,24 @@ local function merge(dst, src)
   return dst
 end
 
+---Make the user's `terminal.keys` replace defaults for the same key spelled differently
+---(`<cr>` and `<CR>`): the merge goes by spelling, and both would be mapped otherwise.
+---@param keys table<string, string|false> merged keys, changed in place
+---@param user table|nil the user's `terminal.keys`
+local function replace_same_keys(keys, user)
+  if type(user) ~= "table" then
+    return
+  end
+  for lhs in pairs(user) do
+    local key = vim.keycode(lhs)
+    for other in pairs(vim.deepcopy(keys)) do
+      if other ~= lhs and user[other] == nil and vim.keycode(other) == key then
+        keys[other] = nil
+      end
+    end
+  end
+end
+
 ---Validate and apply user options over the defaults. Each call starts from the
 ---defaults again, so calling it twice does not stack. On a validation error the
 ---previous config is kept and an error is shown. Unknown options produce one warning.
@@ -318,6 +336,7 @@ function M.setup(opts)
     util.notify("unknown option(s): " .. table.concat(unknown, ", "), vim.log.levels.WARN)
   end
   current = merge(vim.deepcopy(M.defaults), opts)
+  replace_same_keys(current.terminal.keys, type(opts.terminal) == "table" and opts.terminal.keys or nil)
   return true
 end
 
