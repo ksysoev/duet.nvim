@@ -383,8 +383,9 @@ require("duet.context").register({name}, {fn})     *duet.context.register()*
     quick.
 
 require("duet.context").unregister({name})       *duet.context.unregister()*
-    Remove a placeholder, built-in ones included. `{name}` is then sent as
-    typed.
+    Remove a placeholder. Removing one you registered over a built-in
+    brings the built-in back; removing a built-in itself hides it, and
+    `{name}` is then sent as typed.
 
 require("duet.config").get()                              *duet.config.get()*
     Return the current configuration (treat it as read-only).

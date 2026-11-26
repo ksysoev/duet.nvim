@@ -79,12 +79,15 @@ function M.register(name, fn)
   registry[name] = fn
 end
 
----Remove a provider, built-in ones included. `{name}` is then left as typed.
+---Remove a provider. Removing one that replaced a built-in brings the built-in back;
+---removing a built-in itself hides it, and `{name}` is then left as typed.
 ---@param name string
 function M.unregister(name)
-  if builtin[name] then
+  if builtin[name] and not registry[name] then
+    -- The built-in itself: hide it.
     registry[name] = false
   else
+    -- A provider of yours; a built-in it replaced comes back.
     registry[name] = nil
   end
 end

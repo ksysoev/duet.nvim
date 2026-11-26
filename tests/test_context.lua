@@ -201,6 +201,31 @@ T["register()"]["replaces a built-in"] = function()
   eq(context.render("{file}", {}), "mine")
 end
 
+T["register()"]["unregister brings a replaced built-in back, then hides it"] = function()
+  local context = require("duet.context")
+  context.register("file", function()
+    return { text = "mine", data = {} }
+  end)
+  context.unregister("file")
+  eq(vim.tbl_contains(context.names(), "file"), true)
+  -- The built-in runs again: nothing for a buffer without a file.
+  local ctx = { buf = vim.api.nvim_create_buf(false, true), cwd = "/" }
+  eq({ context.render("{file}", ctx) }, { "", { used = { "file" }, empty = { "file" }, errors = {} } })
+  context.unregister("file")
+  eq(vim.tbl_contains(context.names(), "file"), false)
+  eq(context.render("{file}", {}), "{file}")
+end
+
+T["register()"]["unregister removes a provider of yours"] = function()
+  local context = require("duet.context")
+  context.register("mine", function()
+    return { text = "x", data = {} }
+  end)
+  context.unregister("mine")
+  eq(context.render("{mine}", {}), "{mine}")
+  eq(vim.tbl_contains(context.names(), "mine"), false)
+end
+
 T["names()"] = function()
   local context = require("duet.context")
   context.register("zz", function() end)
