@@ -219,7 +219,7 @@ function M.parse(line)
           line = ref.line,
           end_line = ref.end_line,
           col = ref.col,
-          s = at and (ts - 1) or ts,
+          s = at and (s + lead:find("@", 1, true) - 1) or ts,
           e = phrase_end or te,
         }
         last_e = phrase_end or te

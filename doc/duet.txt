@@ -754,10 +754,10 @@ exist is not a link: `gf` on it shows a message, and `]l` and `[l` skip it.
 A directory opens in whatever handles directories (|netrw|, a file
 explorer plugin).
 
-Where the file opens: in the code window you used last in the tab (the
-previous window, else the first window with a normal file buffer). A
-floating terminal is hidden first, so the file isn't behind it. With no code
-window, a split opens on the other side of the terminal. The cursor goes to
+Where the file opens: in the previous window if it shows a file, else in the
+first window in the tab that does. A floating terminal is hidden first, so
+the file isn't behind it. With no such window, a split opens on the other
+side of the terminal. The cursor goes to
 the line (and column), the view is centered, and the line or range flashes
 with |hl-DuetLinkFlash|. The jump is added to the |jumplist|, so CTRL-O goes
 back.
@@ -770,7 +770,8 @@ a terminal that supports them. duet records the hyperlinks the agent prints
 when that is a file: a `file://` URI or a path, with `#L10` for a line. Once
 the agent writes over a hyperlink's text, for example when its screen
 redraws or the window is resized, duet falls back to the text under the
-cursor.
+cursor. If the agent redraws the same text without the hyperlink, duet can't
+tell, and `gf` there still opens the old target.
 
 Claude Code detects hyperlink support from the environment, which the agent's
 terminal inherits from Neovim's (e.g. `$TERM_PROGRAM` of the terminal Neovim

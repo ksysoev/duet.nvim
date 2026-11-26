@@ -54,6 +54,8 @@ T["parse()"] = MiniTest.new_set({
     { "parent path", "../a.lua:3", { link("../a.lua", 1, 10, { line = 3 }) } },
     { "diff stat", " lua/duet/links.lua | 30 +++", { link("lua/duet/links.lua", 2, 19) } },
     { "markdown bold", "**lua/a.lua**", { link("lua/a.lua", 3, 11) } },
+    { "@ before markdown bold", "@**a.lua**", { link("a.lua", 1, 8) } },
+    { "@ inside markdown bold", "**@a.lua**", { link("a.lua", 3, 8) } },
     { "markdown link", "[x](lua/a.lua#L3)", { link("lua/a.lua", 5, 16, { line = 3 }) } },
     { "trailing punctuation", "(see a.lua:3).", { link("a.lua", 6, 12, { line = 3 }) } },
     { "trailing comma and colon", "a.lua:3, b.lua:", { link("a.lua", 1, 7, { line = 3 }), link("b.lua", 10, 14) } },
@@ -306,6 +308,25 @@ T["terminal"]["opens a split when there is no code window"] = function()
   eq(child.lua_get("s:is_visible()"), true)
   -- The terminal is on the right, so the file goes on the left.
   eq(child.lua_get("vim.fn.winnr()"), 1)
+  -- With nothing else to take room from, the terminal's window is split in two.
+  eq(child.lua_get("vim.api.nvim_win_get_width(0) >= 90"), true)
+end
+
+T["terminal"]["a split for the file keeps the terminal's size"] = function()
+  -- A sidebar is the only other window: it is not a code window. The terminal's split
+  -- fixes its width, so the new window takes its room from the sidebar.
+  child.lua("vim.bo.buftype = 'nofile'")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  local before = child.lua_get("vim.api.nvim_win_get_width(s:window())")
+  child.type_keys("gf")
+  child.lua("vim.wait(50)") -- let WinResized run
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_win_get_width(s:window())"), before)
+  -- The split's size was duet's, not taken as one the user made by hand.
+  eq(child.lua_get("vim.w[s:window()].duet_hand"), vim.NIL)
+  eq(child.lua_get("vim.api.nvim_win_get_width(0) >= 20"), true)
 end
 
 T["terminal"]["]l and [l move between links that resolve"] = function()
@@ -430,6 +451,28 @@ T["terminal"]["keeps OSC 8 hyperlinks on their line while the scrollback is trim
   )
   child.lua("vim.bo[s.buf].scrollback = 3")
   child.lua("cursor_on('after8'); cursor_on('LINK')")
+  require_osc8()
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
+end
+
+T["terminal"]["records OSC 8 hyperlinks at the bottom of the output"] = MiniTest.new_set({
+  parametrize = {
+    -- The link is on the last screen row and the screen scrolls, in pieces, before
+    -- duet reads the link's text.
+    {
+      "while the screen scrolls",
+      "for i in $(seq 1 60); do echo f$i; done; %s; "
+        .. "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.004; echo after$i; done",
+    },
+    { "after a long output", "for i in $(seq 1 200); do echo f$i; done; %s" },
+  },
+})
+
+T["terminal"]["records OSC 8 hyperlinks at the bottom of the output"]["%s"] = function(_, script)
+  agent(script:format(osc8("file://" .. root .. "/lua/duet/init.lua#L5", "LINK")))
+  child.lua("cursor_on('LINK')")
   require_osc8()
   child.type_keys("gf")
   local at = child.lua_get("where()")
