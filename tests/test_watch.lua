@@ -486,6 +486,83 @@ T["reload"]["a file created in a new directory is noticed"] = function()
   eq(child.lua_get("wait(function() return vim.v.warningmsg:find('W13', 1, true) ~= nil end, 3000)"), true)
 end
 
+T["reload"]["while typing, a deleted file waits"] = function()
+  -- :checktime on a deleted file pauses the editor for a second (E211).
+  start()
+  child.lua([[
+    vim.cmd.edit(root .. '/a.txt')
+    _G.buf = vim.api.nvim_get_current_buf()
+    _G.reasons = {}
+    vim.api.nvim_create_autocmd("FileChangedShell", {
+      buffer = buf,
+      callback = function() table.insert(_G.reasons, vim.v.fcs_reason) end,
+    })
+    session()
+    _G.get_mode = vim.api.nvim_get_mode
+    vim.api.nvim_get_mode = function() return { mode = "t", blocking = false } end
+    os.remove(root .. '/a.txt')
+  ]])
+  eq(child.lua_get("wait(function() return #W._state().pending > 0 end)"), true)
+  child.lua("vim.wait(200)")
+  eq(child.lua_get("reasons"), {})
+  child.lua("vim.api.nvim_get_mode = get_mode; vim.api.nvim_exec_autocmds('ModeChanged', {})")
+  eq(child.lua_get("wait(function() return #reasons > 0 end)"), true)
+  eq(child.lua_get("reasons"), { "deleted" })
+end
+
+T["reload"]["a buffer wiped by a failing check does not stop the others"] = function()
+  start()
+  vim.fn.writefile({ "three" }, dir .. "/c.txt")
+  child.lua([[
+    vim.cmd.edit(root .. '/a.txt')
+    _G.a = vim.api.nvim_get_current_buf()
+    -- Without 'autoread' the change goes to FileChangedShell.
+    vim.cmd('setlocal noautoread')
+    vim.cmd.edit(root .. '/c.txt')
+    _G.c = vim.api.nvim_get_current_buf()
+    vim.api.nvim_create_autocmd("FileChangedShell", {
+      buffer = a,
+      callback = function()
+        pcall(vim.api.nvim_buf_delete, a, { force = true })
+        error("boom")
+      end,
+    })
+    session()
+    write(root .. '/a.txt', 'changed by the agent\n')
+    write(root .. '/c.txt', 'c changed\n')
+  ]])
+  eq(child.lua_get("wait(function() return lines(c) == 'c changed' end)"), true)
+  local notes = child.lua_get("_G.notes")
+  eq(#notes, 1)
+  eq(notes[1].msg:match("watch: cannot check .*a%.txt") ~= nil, true)
+end
+
+T["reload"]["changes while the editor is busy do not bring retries forward"] = function()
+  start({ watch = { debounce_ms = 0 } })
+  child.lua([[
+    vim.cmd.edit(root .. '/a.txt')
+    _G.buf = vim.api.nvim_get_current_buf()
+    session()
+    _G.calls = 0
+    _G.get_mode = vim.api.nvim_get_mode
+    vim.api.nvim_get_mode = function()
+      _G.calls = _G.calls + 1
+      return { mode = "c", blocking = false }
+    end
+    -- A log written every 5 ms, for longer than the deadline.
+    _G.noise = vim.uv.new_timer()
+    noise:start(0, 5, function()
+      local f = io.open(root .. '/noise.log', 'a')
+      f:write('x')
+      f:close()
+    end)
+  ]])
+  child.lua("vim.wait(1500)")
+  child.lua("noise:stop(); noise:close(); vim.api.nvim_get_mode = get_mode")
+  -- Retries every 100 ms: about 15, not one per write.
+  eq(child.lua_get("calls < 40"), true)
+end
+
 T["reload"]["while typing, a created file waits like a modified buffer"] = function()
   start()
   child.lua([[
