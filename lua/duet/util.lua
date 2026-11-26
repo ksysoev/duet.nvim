@@ -1,4 +1,4 @@
----@brief Small shared helpers: user notifications and path handling.
+---@brief Small shared helpers: user notifications, paths and code windows.
 
 local M = {}
 
@@ -50,6 +50,37 @@ function M.relpath(path, root)
     return abs, false
   end
   return rel, true
+end
+
+---Whether `buf` holds code the user works on, rather than a terminal, help, a list etc.
+---@param buf integer
+---@return boolean
+function M.is_code(buf)
+  return vim.bo[buf].buftype == "" and vim.b[buf].duet_session == nil
+end
+
+---The window that shows code: the current one when it does, else the previous window,
+---else the first non-floating window showing code in the tab, else the current one.
+---@return integer win
+---@return boolean found whether `win` shows code
+function M.code_window()
+  local win = vim.api.nvim_get_current_win()
+  if M.is_code(vim.api.nvim_win_get_buf(win)) then
+    return win, true
+  end
+  local candidates = { vim.fn.win_getid(vim.fn.winnr("#")) }
+  vim.list_extend(candidates, vim.api.nvim_tabpage_list_wins(0))
+  for _, id in ipairs(candidates) do
+    if
+      id ~= 0
+      and vim.api.nvim_win_is_valid(id)
+      and vim.api.nvim_win_get_config(id).relative == ""
+      and M.is_code(vim.api.nvim_win_get_buf(id))
+    then
+      return id, true
+    end
+  end
+  return win, false
 end
 
 return M
