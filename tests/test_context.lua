@@ -638,6 +638,34 @@ C["block-wise selection over a tab gives what Vim yanks"] = function()
   eq(child.lua_get("require('duet.context').get('selection', _G.ctx).data.text"), table.concat(want, "\n"))
 end
 
+---Select a block from {line, col} (0-based col) with `keys`, capture it with <F2>, then
+---yank the same block with Vim; return duet's text and Vim's.
+local function block_vs_yank(lines, cursor, keys)
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, ...)", { lines })
+  child.api.nvim_win_set_cursor(0, cursor)
+  child.type_keys("<C-v>", keys, "<F2>", '"zy')
+  return child.lua_get("require('duet.context').get('selection', _G.ctx).data.text"), child.fn.getreg("z")
+end
+
+C["a block made with $ takes each line to its end"] = function()
+  local got, want = block_vs_yank({ "abcdefgh", "ab", "abc" }, { 1, 1 }, "2j$")
+  eq(got, "bcdefgh\nb\nbc")
+  eq(got, want)
+  eq(ctx().range.to_end, true)
+end
+
+C["a $ block over a line shorter than its left column"] = function()
+  local got, want = block_vs_yank({ "abcdefgh", "a", "abcdef" }, { 1, 2 }, "2j$")
+  -- A yank pads the short line with spaces; the agent gets it empty.
+  eq(got, "cdefgh\n\ncdef")
+  eq(want, "cdefgh\n" .. string.rep(" ", 7) .. "\ncdef")
+end
+
+C["a block without $ is not to_end"] = function()
+  block_vs_yank({ "abcdefgh", "ab", "abc" }, { 1, 1 }, "2jl")
+  eq(ctx().range.to_end, nil)
+end
+
 C["selection made backwards, from Lua"] = function()
   child.api.nvim_win_set_cursor(0, { 2, 2 })
   child.type_keys("v", "k", "<F3>")

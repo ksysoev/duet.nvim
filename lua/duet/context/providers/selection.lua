@@ -16,15 +16,45 @@ function M.fence(text)
   return string.rep("`", math.max(3, longest + 1))
 end
 
----The lines of the range: whole lines, or the exact region for a character-wise or
----block-wise selection.
----@param buf integer
+---The lines of a block made with `$`: each line from the block's left screen column to its
+---end, or "" for a line that ends before it. A tab only partly inside the block is taken
+---whole (a yank pads it with spaces instead). Screen columns depend on the window's
+---options, such as 'tabstop', so they are measured in `win`.
+---@param win integer window showing the buffer
 ---@param range duet.Range
 ---@return string[]
-local function range_lines(buf, range)
+local function block_to_end(win, range)
+  return vim.api.nvim_win_call(win, function()
+    local left = math.min(
+      vim.fn.virtcol({ range.start_line, range.start_col }, 1)[1],
+      vim.fn.virtcol({ range.end_line, range.end_col }, 1)[1]
+    )
+    local lines = {}
+    for lnum = range.start_line, range.end_line do
+      local line = vim.fn.getline(lnum)
+      if vim.fn.strdisplaywidth(line) < left then
+        lines[#lines + 1] = ""
+      else
+        lines[#lines + 1] = line:sub(vim.fn.virtcol2col(win, lnum, left))
+      end
+    end
+    return lines
+  end)
+end
+
+---The lines of the range: whole lines, or the exact region for a character-wise or
+---block-wise selection.
+---@param ctx duet.Context
+---@param range duet.Range
+---@return string[]
+local function range_lines(ctx, range)
+  local buf = ctx.buf
   local type = REGION_TYPES[range.mode]
   if not type then
     return vim.api.nvim_buf_get_lines(buf, range.start_line - 1, range.end_line, false)
+  end
+  if range.to_end then
+    return block_to_end(ctx.win, range)
   end
   return vim.fn.getregion(
     { buf, range.start_line, range.start_col, 0 },
@@ -43,7 +73,7 @@ function M.selection(ctx)
     return nil
   end
   local context = require("duet.context")
-  local text = table.concat(range_lines(ctx.buf, range), "\n")
+  local text = table.concat(range_lines(ctx, range), "\n")
   if vim.trim(text) == "" then
     return nil
   end
@@ -67,6 +97,7 @@ function M.selection(ctx)
       start_col = range.start_col,
       end_col = range.end_col,
       mode = range.mode,
+      to_end = range.to_end,
       text = text,
     },
   }

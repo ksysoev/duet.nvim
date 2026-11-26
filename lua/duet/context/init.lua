@@ -16,6 +16,7 @@ M.MAX_ITEMS = 200
 ---@field mode "line"|"char"|"block"
 ---@field start_col? integer 1-based byte column on `start_line` ("char" and "block" only)
 ---@field end_col? integer 1-based byte column on `end_line`, inclusive ("char" and "block" only)
+---@field to_end? boolean a block made with `$`: every line runs to its end ("block" only)
 
 ---@class duet.Context
 ---@field buf integer buffer the context is about
@@ -193,10 +194,16 @@ local function command_range(buf, opts, mode)
     return { start_line = math.min(opts.line1, opts.line2), end_line = math.max(opts.line1, opts.line2), mode = "line" }
   end
   local vmode = VISUAL_MODES[mode]
-  if vmode then
-    return region(on_line(buf, vim.fn.getpos("v")), on_line(buf, vim.fn.getpos(".")), vmode)
+  if not vmode then
+    return nil
   end
-  return nil
+  local range = region(on_line(buf, vim.fn.getpos("v")), on_line(buf, vim.fn.getpos(".")), vmode)
+  -- After `$`, the column the cursor wants is v:maxcol: a block then takes each line to its
+  -- end, which getregion() can't express.
+  if vmode == "block" and vim.fn.getcurpos()[5] == vim.v.maxcol then
+    range.to_end = true
+  end
+  return range
 end
 
 ---Capture the context for a command or API call: the buffer, window, cursor and range,
