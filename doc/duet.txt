@@ -620,7 +620,10 @@ Placeholder       Replaced with ~
 `{selection}`     The range as a fenced code block in the file's language,
                   below its `path:L10-L20` location.
 `{diagnostics}`   The current buffer's diagnostics, or those in the range,
-                  one `path:line: [SEVERITY] message` line each.
+                  one `path:line: [SEVERITY] message` line each. A
+                  diagnostic is in the range if it is on one of its lines
+                  as Neovim counts them (|vim.diagnostic.get()| with
+                  `lnum`).
 `{diagnostics_all}` The diagnostics of every buffer.
 `{quickfix}`      The quickfix list, one `path:line:col: text` line each.
 `{buffers}`       A reference to each listed file buffer, one per line.
@@ -657,6 +660,10 @@ How placeholders are replaced:
 - Code blocks and lists go on lines of their own, so
   `Refactor {selection}` sends "Refactor" with the block below it.
 - Text that replaces a placeholder is not searched for placeholders.
+- Text right after an empty placeholder stays, punctuation included, so
+  put a placeholder that may be empty at the end of a sentence or on a
+  line of its own: `{diagnostics_all}, then {file}` starts with a comma
+  when there are no diagnostics.
 
                                                        *duet-context-ctx*
 A provider gets a context table: `buf`, `win`, `cursor` (`{ line, col }`,

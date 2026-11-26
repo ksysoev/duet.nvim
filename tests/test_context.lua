@@ -475,6 +475,18 @@ P["diagnostics: sorted, errors first"] = function()
   eq(result.data.truncated, nil)
 end
 
+P["diagnostics: a range counts lines as Neovim does"] = function()
+  local buf = fixture("a.lua", vim.fn["repeat"]({ "x" }, 12), "lua")
+  vim.diagnostic.set(ns, buf, {
+    -- Ends at column 0 of line 10: Neovim counts it on line 10 too (lnum filter, ]d).
+    diag(8, vim.diagnostic.severity.ERROR, "to the start of line 10", { end_lnum = 9, end_col = 0 }),
+    diag(7, vim.diagnostic.severity.ERROR, "line 8 only", { end_lnum = 7, end_col = 1 }),
+  })
+  eq(#vim.diagnostic.get(buf, { lnum = 9 }), 1)
+  local result = get("diagnostics", ctx_for(buf, { range = lines_range(10, 12) }))
+  eq(result.text, "a.lua:9: [ERROR] to the start of line 10")
+end
+
 P["diagnostics: only those overlapping the range"] = function()
   local W = vim.diagnostic.severity.WARN
   local buf = fixture("a.lua", { "1", "2", "3", "4", "5", "6" }, "lua")
