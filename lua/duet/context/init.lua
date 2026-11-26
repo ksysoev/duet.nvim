@@ -56,6 +56,11 @@ local builtin = {
   buffers = "duet.context.providers.buffers",
 }
 
+---Why a built-in module failed to load, by module: a second require() of it only says
+---"loop or previous error loading module".
+---@type table<string, string>
+local load_errors = {}
+
 ---Registered providers. `false` hides a built-in one.
 ---@type table<string, duet.ContextProvider|false>
 local registry = {}
@@ -112,9 +117,13 @@ local function provider(name)
   if not module then
     return nil
   end
+  if load_errors[module] then
+    return nil, ("context: {%s} failed to load: %s"):format(name, load_errors[module])
+  end
   local ok, providers = pcall(require, module)
   if not ok then
-    return nil, ("context: failed to load '%s': %s"):format(name, providers)
+    load_errors[module] = tostring(providers)
+    return nil, ("context: {%s} failed to load: %s"):format(name, providers)
   end
   return providers[name]
 end
@@ -392,10 +401,19 @@ function M.render(template, ctx)
   local cache = {}
   local function resolve(name)
     if cache[name] == nil then
-      if not provider(name) then
+      -- A built-in that fails to load counts as a failed placeholder, not an unknown name:
+      -- it must not be sent as typed without a word.
+      local fn, load_err = provider(name)
+      if not fn and not load_err then
         return nil
       end
-      local result, err = M.get(name, ctx)
+      local result, err
+      if fn then
+        result, err = M.get(name, ctx)
+      else
+        err = load_err
+        require("duet.log").error("%s", err)
+      end
       cache[name] = result or false
       if err then
         info.errors[name] = (err:gsub("^context: ", ""))

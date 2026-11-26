@@ -115,6 +115,22 @@ T["render()"]["calls each provider once"] = function()
   eq(calls, 1)
 end
 
+T["render()"]["reports a built-in provider that fails to load"] = function()
+  local module = "duet.context.providers.quickfix"
+  package.preload[module] = function()
+    error("syntax oops")
+  end
+  local context = require("duet.context")
+  local ok, text, info = pcall(context.render, "Fix {quickfix}", {})
+  local _, err = context.expand("Fix {quickfix}", {})
+  package.preload[module] = nil
+  eq(ok, true)
+  eq(text, "Fix")
+  eq({ info.used, info.empty }, { { "quickfix" }, { "quickfix" } })
+  eq(info.errors.quickfix:match("^{quickfix} failed to load: .*syntax oops") ~= nil, true)
+  eq(err:match("^nothing to send: {quickfix} failed to load: .*syntax oops") ~= nil, true)
+end
+
 T["render()"]["leaves an unregistered built-in as typed"] = function()
   local context = require("duet.context")
   context.unregister("file")
