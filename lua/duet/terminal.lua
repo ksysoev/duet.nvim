@@ -916,8 +916,11 @@ end
 local LINK_ACTIONS = {
   open_link = {
     desc = "duet: open the file link under the cursor",
-    fn = function()
-      require("duet.links").follow()
+    fn = function(lhs)
+      -- <CR> still moves down where there is nothing to open. Other keys say so: their
+      -- built-in action fails in a terminal (gf) or would surprise.
+      local enter = vim.keycode(lhs) == vim.keycode("<CR>")
+      require("duet.links").follow({ fallback = enter and lhs or nil })
     end,
   },
   next_link = {
@@ -944,7 +947,9 @@ local function set_keymaps(self)
         self:hide()
       end, { buffer = self.buf, desc = "duet: hide the agent terminal" })
     elseif LINK_ACTIONS[action] then
-      vim.keymap.set("n", lhs, LINK_ACTIONS[action].fn, { buffer = self.buf, desc = LINK_ACTIONS[action].desc })
+      vim.keymap.set("n", lhs, function()
+        LINK_ACTIONS[action].fn(lhs)
+      end, { buffer = self.buf, desc = LINK_ACTIONS[action].desc })
     end
   end
 end

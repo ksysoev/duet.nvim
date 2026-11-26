@@ -212,7 +212,8 @@ terminal ~
         - `"normal_mode"`: leave |Terminal-mode| (terminal mode only).
         - `"hide"`: hide the terminal (terminal and normal mode).
         - `"open_link"`: open the file link under the cursor (normal
-          mode). See |duet-links|.
+          mode). See |duet-links|. Mapped to <CR>, it moves the cursor down
+          as usual where there is no reference to open.
         - `"next_link"`, `"prev_link"`: move to the next or previous file
           link in the visible output; a count repeats it (normal mode).
           The defaults `]l` and `[l` replace Neovim's |]l| and |[l| in the
@@ -233,8 +234,9 @@ links ~
                                                *duet-config-links-debounce_ms*
     debounce_ms ~
         `integer` (default: `100`)
-        With `highlight`, how long output must pause, or scrolling stop,
-        before the links are underlined again.
+        With `highlight`, how often, at most, the links are underlined
+        again while output changes or the window scrolls, in milliseconds.
+        They are also underlined once it stops.
 
                                                             *duet-config-send*
 send ~

@@ -17,6 +17,7 @@ local M = {}
 ---@field abs? string absolute path, set once resolved
 
 local FLASH_MS = 300
+local NO_LINK = "links: no file link under the cursor"
 
 local hl_ns = vim.api.nvim_create_namespace("duet.links")
 local flash_ns = vim.api.nvim_create_namespace("duet.links.flash")
@@ -472,7 +473,7 @@ function M.at_cursor(win)
       return link
     end
   end
-  return nil, "links: no file link under the cursor"
+  return nil, NO_LINK
 end
 
 ---The first and last buffer rows shown in `win`.
@@ -524,11 +525,14 @@ local SPLIT_FROM = { right = "leftabove vnew", left = "rightbelow vnew", bottom 
 ---@field win integer the window that was current
 ---@field created? integer the split it opened
 ---@field hidden? duet.Session the floating terminal it hid
+---@field buf? integer the empty buffer the split opened with; a failed `:edit` may
+---have named it
 
 ---The window to open a file in: a code window in the tab, else a new split. A floating
 ---duet terminal in front is hidden first, so the file is not opened under it.
----@return integer win
+---@return integer|nil win
 ---@return duet.links.Undo undo
+---@return string|nil err the floating terminal could not be hidden
 local function target_window()
   local util = require("duet.util")
   local cur = vim.api.nvim_get_current_win()
@@ -537,7 +541,10 @@ local function target_window()
   if id and vim.api.nvim_win_get_config(cur).relative ~= "" then
     local session = require("duet.terminal").get(id)
     if session then
-      session:hide()
+      local ok, err = session:hide()
+      if not ok then
+        return nil, undo, err
+      end
       undo.hidden = session
       cur = vim.api.nvim_get_current_win()
     end
@@ -548,6 +555,7 @@ local function target_window()
   end
   vim.cmd(SPLIT_FROM[vim.w[cur].duet_layout] or "leftabove vnew")
   undo.created = vim.api.nvim_get_current_win()
+  undo.buf = vim.api.nvim_get_current_buf()
   return undo.created, undo
 end
 
@@ -556,6 +564,10 @@ end
 local function restore_layout(undo)
   if undo.created and vim.api.nvim_win_is_valid(undo.created) then
     pcall(vim.api.nvim_win_close, undo.created, true)
+  end
+  local buf = undo.buf
+  if buf and vim.api.nvim_buf_is_valid(buf) and not vim.bo[buf].modified and #vim.fn.win_findbuf(buf) == 0 then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
   if undo.hidden then
     local win = undo.hidden:show()
@@ -591,7 +603,10 @@ function M.open(link, opts)
     end
   end
   ensure_highlights()
-  local win, undo = target_window()
+  local win, undo, hide_err = target_window()
+  if not win then
+    return nil, ("links: cannot open '%s': %s"):format(link.path, hide_err)
+  end
   vim.api.nvim_set_current_win(win)
   local buf = vim.api.nvim_win_get_buf(win)
   if vim.fs.normalize(vim.api.nvim_buf_get_name(buf)) ~= abs then
@@ -628,10 +643,15 @@ end
 
 ---Open the link under the cursor (the `"open_link"` key action). Problems are shown
 ---with a notification.
-function M.follow()
+---@param opts? { fallback?: string } with no reference under the cursor, run these keys'
+---built-in action (as with `:normal!`) instead of saying so
+function M.follow(opts)
   local link, err = M.at_cursor()
   if link then
     link, err = M.open(link)
+  elseif err == NO_LINK and opts and opts.fallback then
+    vim.cmd.normal({ args = { vim.v.count1 .. vim.keycode(opts.fallback) }, bang = true })
+    return
   end
   if not link then
     require("duet.util").notify(err or "links: nothing to open", vim.log.levels.WARN)
@@ -661,7 +681,8 @@ function M.jump(dir, count)
     else
       for i = #links, 1, -1 do
         local link = links[i]
-        if link.row < row or (link.row == row and link.s < col) then
+        -- A link the cursor is inside is not the previous one.
+        if link.row < row or (link.row == row and link.e < col) then
           step = link
           break
         end
@@ -709,8 +730,12 @@ function M.attach_highlighter(buf)
   local timer = assert(vim.uv.new_timer())
   local group = vim.api.nvim_create_augroup("duet.links.buf" .. buf, { clear = true })
   local function schedule()
+    -- Throttle rather than debounce: output that never stops (a spinner) still gets its
+    -- links underlined, at most once per debounce_ms.
+    if timer:is_active() then
+      return
+    end
     local delay = require("duet.config").get().links.debounce_ms
-    timer:stop()
     timer:start(delay, 0, function()
       vim.schedule(function()
         M.highlight(buf)

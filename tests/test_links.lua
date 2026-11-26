@@ -291,6 +291,21 @@ T["terminal"]["no link under the cursor shows a notification"] = function()
   eq(child.lua_get("_G.notes"), { { msg = "[duet] links: no file link under the cursor", level = 3 } })
 end
 
+T["terminal"]["<CR> moves down where there is no link"] = function()
+  agent("printf 'nothing here\\nnext line\\n'")
+  local row = child.lua_get("cursor_on('nothing')")
+  child.type_keys("<CR>")
+  eq(child.lua_get("{ vim.fn.line('.'), where().terminal }"), { row + 1, true })
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["terminal"]["<CR> on a missing file shows a notification"] = function()
+  agent("printf 'see missing/nope.lua:3\\n'")
+  child.lua("cursor_on('nope')")
+  child.type_keys("<CR>")
+  eq(child.lua_get("_G.notes"), { { msg = "[duet] links: no such file 'missing/nope.lua'", level = 3 } })
+end
+
 T["terminal"]["a floating terminal is hidden"] = function()
   agent("printf 'a.lua:1\\n'", { terminal = { layout = "float" } })
   child.lua("cursor_on('a.lua')")
@@ -346,6 +361,10 @@ T["terminal"]["]l and [l move between links that resolve"] = function()
   child.type_keys("[l")
   eq(pos(), { row, 0 })
   eq(child.lua_get("_G.notes[1].msg"), "[duet] links: no previous link in the visible output")
+  -- From inside a link, [l goes to the one before it, not to its start.
+  child.lua("vim.api.nvim_win_set_cursor(0, ...)", { { row, 21 } })
+  child.type_keys("[l")
+  eq(pos(), { row, 0 })
 end
 
 T["terminal"]["keys can be turned off"] = function()
@@ -365,6 +384,28 @@ T["terminal"]["highlights links when enabled"] = function()
   end)]])
   eq(ok, true)
   eq(child.lua_get("vim.fn.hlexists('DuetLink')"), 1)
+end
+
+T["terminal"]["highlights links while output keeps coming"] = function()
+  -- Output every 20 ms, with the link coming once it has started, so a highlighter that
+  -- waits for output to pause would not underline it until the end.
+  agent(
+    "for i in $(seq 1 10); do sleep 0.02; echo pre$i; done; printf 'see a.lua:1\\n'; "
+      .. "for i in $(seq 1 100); do sleep 0.02; echo tick$i; done",
+    { links = { highlight = true, debounce_ms = 50 } }
+  )
+  -- TextChangedT fires from the main loop in Terminal-mode: let the child run and poll it.
+  child.lua("vim.api.nvim_set_current_win(s:window()); vim.cmd.startinsert()")
+  local function underlined()
+    return child.lua_get([[#vim.api.nvim_buf_get_extmarks(s.buf,
+      vim.api.nvim_create_namespace("duet.links"), 0, -1, {}) > 0]])
+  end
+  local function done()
+    return child.lua_get([[table.concat(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false), "\\n")
+      :find("tick100", 1, true) ~= nil]])
+  end
+  local seen = vim.wait(1500, underlined, 20)
+  eq({ seen, done() }, { true, false })
 end
 
 T["terminal"]["does not highlight by default"] = function()
@@ -507,10 +548,20 @@ T["terminal"]["a file that fails to open leaves the layout as it was"]["with %s"
     callback = function() error("cannot read") end,
   })]])
   local before = child.lua_get("#vim.api.nvim_tabpage_list_wins(0)")
+  local bufs = child.lua_get("#vim.fn.getbufinfo({ buflisted = 1 })")
   child.type_keys("gf")
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+  eq(child.lua_get("#vim.fn.getbufinfo({ buflisted = 1 })"), bufs)
   eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
   eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
+end
+
+T["terminal"]["a floating terminal that cannot be hidden opens nothing"] = function()
+  agent("printf 'a.lua:1\\n'", { terminal = { layout = "float" } })
+  child.lua("cursor_on('a.lua'); s.hide = function() return nil, 'cannot hide' end")
+  child.type_keys("gf")
+  eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  eq(child.lua_get("_G.notes[1].msg"), "[duet] links: cannot open 'a.lua': cannot hide")
 end
 
 T["terminal"]["ignores text written over an OSC 8 link right after it"] = function()
