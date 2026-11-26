@@ -12,6 +12,7 @@ local M = {}
 ---@field send table options for sending text to the agent
 ---@field prompts table<string, string|false> prompt templates for :Duet ask, by name
 ---@field links table file links in agent output
+---@field watch table reloading buffers when files change on disk
 ---@field review table review options
 
 ---@type duet.Config
@@ -40,6 +41,11 @@ M.defaults = {
   links = {
     highlight = false,
     debounce_ms = 100,
+  },
+  watch = {
+    enabled = true,
+    debounce_ms = 100,
+    autoread = true,
   },
   prompts = {
     explain = "Explain {this}",
@@ -158,6 +164,10 @@ M.schema = {
   links = { type = "table" },
   ["links.highlight"] = { type = "boolean" },
   ["links.debounce_ms"] = { type = validate_count, desc = "non-negative integer" },
+  watch = { type = "table" },
+  ["watch.enabled"] = { type = "boolean" },
+  ["watch.debounce_ms"] = { type = validate_count, desc = "non-negative integer" },
+  ["watch.autoread"] = { type = "boolean" },
   send = { type = "table" },
   ["send.submit_delay_ms"] = { type = validate_count, desc = "non-negative integer" },
   ["send.ready_timeout_ms"] = { type = validate_count, desc = "non-negative integer" },

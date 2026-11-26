@@ -238,6 +238,28 @@ links ~
         again while output changes or the window scrolls, in milliseconds.
         They are also underlined once it stops.
 
+                                                           *duet-config-watch*
+watch ~
+    `table`
+    Reloading buffers when the agent changes their files. See |duet-watch|.
+                                                   *duet-config-watch-enabled*
+    enabled ~
+        `boolean` (default: `true`)
+        Watch the directories of listed file buffers while an agent session
+        runs. Read when a session starts or stops.
+                                               *duet-config-watch-debounce_ms*
+    debounce_ms ~
+        `integer` (default: `100`)
+        How long to wait after the last change on disk before checking the
+        buffers, in milliseconds, so a burst of writes is checked once.
+                                                  *duet-config-watch-autoread*
+    autoread ~
+        `boolean` (default: `true`)
+        Turn on the global 'autoread' while watching, so unchanged buffers
+        reload without asking. Its previous value comes back when the last
+        session stops, unless you changed it meanwhile. With `false`,
+        'autoread' is left as it is.
+
                                                             *duet-config-send*
 send ~
     `table`
