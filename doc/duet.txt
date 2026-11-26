@@ -14,6 +14,7 @@ CONTENTS                                                       *duet-contents*
   9. Terminal ................................................ |duet-terminal|
   10. Sending text ........................................... |duet-send|
   11. Context and prompts .................................... |duet-context|
+  12. File links ............................................. |duet-links|
 
 ==============================================================================
 1. INTRODUCTION                                     *duet* *duet-introduction*
@@ -58,8 +59,15 @@ Defaults: >lua
         split = { width = 80, height = 0.4 },
         close_on_exit = "success",
         auto_insert = true,
-        keys = { ["<C-q>"] = "normal_mode" },
+        keys = {
+          ["<C-q>"] = "normal_mode",
+          gf = "open_link",
+          ["<CR>"] = "open_link",
+          ["]l"] = "next_link",
+          ["[l"] = "prev_link",
+        },
       },
+      links = { highlight = false, debounce_ms = 100 },
       send = { submit_delay_ms = 100, ready_timeout_ms = 10000 },
       prompts = {
         explain = "Explain {this}",
@@ -195,12 +203,40 @@ terminal ~
         Enter |Terminal-mode| when the terminal is opened or entered.
                                                    *duet-config-terminal-keys*
     keys ~
-        `table<string, string|false>` (default:
-        `{ ["<C-q>"] = "normal_mode" }`)
-        Buffer-local mappings in the terminal, keyed by {lhs}. Actions:
+        `table<string, string|false>` (default: `<C-q>` leaves
+        terminal mode, `gf` and `<CR>` open a link, `]l` and `[l` move
+        between links)
+        Buffer-local mappings in the terminal, keyed by {lhs}. Your keys
+        are added to the defaults, and replace a default for the same key
+        however it is spelled (`<cr>` replaces `<CR>`). Actions:
         - `"normal_mode"`: leave |Terminal-mode| (terminal mode only).
         - `"hide"`: hide the terminal (terminal and normal mode).
+        - `"open_link"`: open the file link under the cursor (normal
+          mode). See |duet-links|. Mapped to <CR>, it moves the cursor down
+          as usual where there is no reference to open.
+        - `"next_link"`, `"prev_link"`: move to the next or previous file
+          link in the visible output; a count repeats it (normal mode).
+          The defaults `]l` and `[l` replace Neovim's |]l| and |[l| in the
+          agent's terminal only.
         - `false`: no mapping, e.g. to turn off a default.
+
+                                                           *duet-config-links*
+links ~
+    `table`
+    File links in the agent's output. See |duet-links|.
+                                                 *duet-config-links-highlight*
+    highlight ~
+        `boolean` (default: `false`)
+        Underline the links in the visible part of the terminal that point
+        to existing files, with |hl-DuetLink|. Each update checks the
+        files on screen, so it is off by default. Read when a terminal
+        starts.
+                                               *duet-config-links-debounce_ms*
+    debounce_ms ~
+        `integer` (default: `100`)
+        With `highlight`, how often, at most, the links are underlined
+        again while output changes or the window scrolls, in milliseconds.
+        They are also underlined once it stops.
 
                                                             *duet-config-send*
 send ~
@@ -512,8 +548,9 @@ output. The reason names the signal for codes above 128 (e.g. `137` is
 
 In a terminal kept after the agent exited, `i`, `a`, `I` or `A` restarts the
 agent in the same window, and `q` closes the terminal and ends the session.
-A key you map to `"hide"` in |duet-config-terminal-keys| keeps that action,
-and the error message only names the keys that are left.
+A key you map in Normal mode in |duet-config-terminal-keys| (any action but
+`"normal_mode"`) keeps that action, and the error message only names the keys
+that are left.
 
 If the agent exits while its terminal is hidden and the terminal is kept,
 |:Duet-open| (or |:Duet|) first shows it, so you can read the output; opening
@@ -689,4 +726,88 @@ Mappings, for example: >lua
     -- Pick a prompt.
     vim.keymap.set({ "n", "x" }, "<leader>ap", ":Duet ask<CR>")
 <
+==============================================================================
+12. FILE LINKS                                                    *duet-links*
+
+Agents point at code as `path:line`. In the agent's terminal, in normal
+mode, `gf` or <CR> on such a reference opens the file there, and `]l` and
+`[l` move the cursor to the next or previous one on screen (see
+|duet-config-terminal-keys| to change the keys).
+
+References duet recognizes ~
+    `lua/duet/init.lua:10`          line
+    `lua/duet/init.lua:10:5`        line and column
+    `init.lua:10-20`  `a.lua:L10-L20`  range
+    `a.lua#L10`  `a.lua#L10-L20`  `a.lua#L10C5`
+    `@lua/duet/init.lua`  `@a.lua (lines 10-20)`  as duet sends them
+    `` `Makefile` ``                  any name in backticks
+    `a.lua:12:text`  `a.lua:12:5:text`  grep and ripgrep matches
+    `File "a.py", line 10`          Python tracebacks
+    `file:///abs/a.lua#L3`          file URIs
+Paths may be relative, absolute or start with `~`. They can be surrounded
+by brackets, quotes or punctuation, as in `Read(a.lua)`, `(see a.lua:3).`
+or compiler output (`./a.go:12:3: …`). Without a line number, a word
+counts only if it has a `/` or an extension, starts with `@`, or is in
+backticks. URLs other than `file://` are not file links.
+
+A relative path is looked up in the session's project root (|duet-terminal|),
+then in the git root that contains it. A reference to a file that does not
+exist is not a link: `gf` on it shows a message, and `]l` and `[l` skip it.
+A directory opens in whatever handles directories (|netrw|, a file
+explorer plugin).
+
+Where the file opens: in the previous window if it shows a file, else in the
+first window in the tab that does. A floating terminal is hidden first, so
+the file isn't behind it. With no such window, a split opens on the other
+side of the terminal. The cursor goes to
+the line (and column), the view is centered, and the line or range flashes
+with |hl-DuetLinkFlash|. The jump is added to the |jumplist|, so CTRL-O goes
+back.
+
+OSC 8 hyperlinks ~
+Programs can print a link whose target differs from its text, as OSC 8
+hyperlinks; Claude Code does so for markdown links and URLs when it detects
+a terminal that supports them. duet records the hyperlinks the agent prints
+(Neovim reports them with |TermRequest|) and `gf` on one opens its target
+when that is a file: a `file://` URI or a path, with `#L10` for a line. Once
+the agent writes over a hyperlink's text, for example when its screen
+redraws or the window is resized, duet falls back to the text under the
+cursor. If the agent redraws the same text without the hyperlink, duet can't
+tell, and `gf` there still opens the old target.
+
+Claude Code detects hyperlink support from the environment, which the agent's
+terminal inherits from Neovim's (e.g. `$TERM_PROGRAM` of the terminal Neovim
+runs in). To turn it on or off regardless: >lua
+    agents = { claude = { env = { FORCE_HYPERLINK = "1" } } }  -- "0": off
+<
+
+Limits: a reference broken over two lines by wrapping is not recognized.
+Paths with spaces are only recognized as OSC 8 targets or `file://` URIs
+(with `%20`).
+
+                                                                 *hl-DuetLink*
+DuetLink          Links underlined with |duet-config-links-highlight|.
+                  Linked to |hl-Underlined|.
+                                                            *hl-DuetLinkFlash*
+DuetLinkFlash     The line or range briefly highlighted when a link opens.
+                  Linked to |hl-IncSearch|.
+
+Lua API ~
+                                                          *duet.links.parse()*
+require("duet.links").parse({line})
+    The file references in the string {line}, without checking the files:
+    a list of `{ path, line?, end_line?, col?, s, e }`, where `s` and `e`
+    are the 1-based byte columns of the reference (inclusive).
+
+                                                        *duet.links.resolve()*
+require("duet.links").resolve({path}, {cwd})
+    The absolute path {path} refers to, looked up as described above from
+    {cwd} (default: the current directory), or `nil` and an error.
+
+                                                           *duet.links.open()*
+require("duet.links").open({link}, {opts})
+    Open a link (a table with `path` and optionally `line`, `end_line`,
+    `col`) as `gf` does. A relative `path` is resolved from `opts.cwd`
+    (default: the project root). Returns `true`, or `nil` and an error.
+
  vim:tw=78:ts=8:noet:ft=help:norl:

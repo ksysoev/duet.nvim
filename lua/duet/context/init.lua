@@ -133,35 +133,8 @@ end
 
 -- Capturing ------------------------------------------------------------------
 
----Whether `buf` holds code the user works on, rather than a terminal, help, a list etc.
----@param buf integer
----@return boolean
-local function is_code(buf)
-  return vim.bo[buf].buftype == "" and vim.b[buf].duet_session == nil
-end
-
----The window to take context from: the current one when it shows code, else the
----previous window, else the first window showing code in the tab, else the current one.
----@return integer
-local function code_window()
-  local win = vim.api.nvim_get_current_win()
-  if is_code(vim.api.nvim_win_get_buf(win)) then
-    return win
-  end
-  local candidates = { vim.fn.win_getid(vim.fn.winnr("#")) }
-  vim.list_extend(candidates, vim.api.nvim_tabpage_list_wins(0))
-  for _, id in ipairs(candidates) do
-    if
-      id ~= 0
-      and vim.api.nvim_win_is_valid(id)
-      and vim.api.nvim_win_get_config(id).relative == ""
-      and is_code(vim.api.nvim_win_get_buf(id))
-    then
-      return id
-    end
-  end
-  return win
-end
+local is_code = require("duet.util").is_code
+local code_window = require("duet.util").code_window
 
 -- Visual and Select modes (mode() values), and the kind of selection each makes.
 local VISUAL_MODES = { v = "char", V = "line", ["\22"] = "block", s = "char", S = "line", ["\19"] = "block" }
