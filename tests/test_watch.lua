@@ -229,11 +229,14 @@ end
 
 T["lifecycle"]["a timer that cannot be created leaves watching off"] = function()
   child.lua([[
-    _G.new_timer = vim.uv.new_timer
-    vim.uv.new_timer = function() return nil, "EMFILE: too many open files" end
     vim.cmd.edit(root .. '/a.txt')
-    _G.s = session()
+    local agent = assert(require("duet.agents").get("fake"))
+    -- Only around the start: Neovim itself creates timers too.
+    local new_timer = vim.uv.new_timer
+    vim.uv.new_timer = function() return nil, "EMFILE: too many open files" end
+    local ok, s = pcall(T.Session.new, agent, { root = root, hidden = true })
     vim.uv.new_timer = new_timer
+    _G.s = assert(ok and s, s)
   ]])
   eq(child.lua_get("s:is_running()"), true)
   eq(child.lua_get("W._state()"), IDLE)
