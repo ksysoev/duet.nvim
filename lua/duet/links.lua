@@ -27,11 +27,13 @@ local osc8_ns = vim.api.nvim_create_namespace("duet.links.osc8")
 ---@field s_cell integer 0-based screen cell where it starts
 ---@field e_cell integer screen cell where it ends (exclusive)
 ---@field text? string its text, once it is in the buffer; the span counts while it stays
+---@field line? string the text of its line when the terminal first wrote it, until settled
 
 ---@class duet.links.Spans
 ---@field by_id table<integer, duet.links.Span> by extmark id
 ---@field order integer[] extmark ids, oldest first; may hold ids already dropped
 ---@field count integer spans in `by_id`
+---@field pending table<integer, true> ids of spans whose line the terminal has not written yet
 
 ---OSC 8 spans by buffer.
 ---@type table<integer, duet.links.Spans>
@@ -336,6 +338,7 @@ drop_span = function(buf, id)
   local store = osc8_spans[buf]
   if store and store.by_id[id] then
     store.by_id[id] = nil
+    store.pending[id] = nil
     store.count = store.count - 1
   end
   pcall(vim.api.nvim_buf_del_extmark, buf, osc8_ns, id)
@@ -360,15 +363,16 @@ local function add_span(buf, id, span)
   end
 end
 
----Read a span's text once the terminal has written it. The extmark has stayed on the
----span's line, wherever trimming the scrollback moved it; it now covers the text, whose
+---Turn a span into a ranged extmark over its text, from `span.line`: the line as the
+---terminal first wrote it after the link, before anything could write over it. The extmark
+---has stayed on the span's line, wherever trimming the scrollback moved it, and the text's
 ---byte columns follow from the screen cells.
 ---@param buf integer
 ---@param id integer
 local function settle_span(buf, id)
   local store = osc8_spans[buf]
   local span = store and store.by_id[id]
-  if not span or not vim.api.nvim_buf_is_valid(buf) then
+  if not span or not span.line or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
   local pos = vim.api.nvim_buf_get_extmark_by_id(buf, osc8_ns, id, {})
@@ -376,8 +380,8 @@ local function settle_span(buf, id)
     drop_span(buf, id)
     return
   end
-  local row = pos[1]
-  local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+  local row, line = pos[1], span.line
+  span.line = nil
   local s, e = M.cell_to_byte(line, span.s_cell), M.cell_to_byte(line, span.e_cell)
   if e <= s then
     drop_span(buf, id)
@@ -747,21 +751,52 @@ end
 
 -- OSC 8 ----------------------------------------------------------------------
 
--- How long after an OSC 8 link ends its text is read back. Neovim writes terminal output
--- to the buffer on a short timer, after the TermRequest that announced the link: then the
--- line is there but still empty.
-local OSC8_SETTLE_MS = 50
+-- A span whose line the terminal has not written this long after the link is dropped.
+local OSC8_TIMEOUT_MS = 500
+
+---Take the text of the lines the terminal just wrote for the spans waiting for it. This is
+---the first write after the link, so the text is the link's: a later one may have written
+---over it. Runs in on_lines, where the buffer can only be read; the rest is scheduled.
+---@param buf integer
+---@param first integer first line written (0-based)
+---@param last integer line after the last one written
+local function capture_lines(buf, first, last)
+  local store = osc8_spans[buf]
+  if not store or next(store.pending) == nil then
+    return
+  end
+  for id in pairs(store.pending) do
+    local pos = vim.api.nvim_buf_get_extmark_by_id(buf, osc8_ns, id, {})
+    local row = pos[1]
+    if row and row >= first and row < last then
+      store.pending[id] = nil
+      store.by_id[id].line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+      vim.schedule(function()
+        settle_span(buf, id)
+      end)
+    end
+  end
+end
 
 ---Record OSC 8 hyperlinks the program in terminal `buf` prints, so the link under the
 ---cursor can use their target. TermRequest gives screen cells on a row whose text is not
 ---in the buffer yet, so an extmark marks the row at once (it moves with the line when the
----scrollback is trimmed), and the text and its byte columns are read shortly after. A span
----remembers its text; once the program writes over it, the span no longer counts.
+---scrollback is trimmed), and the text and its byte columns are taken when the terminal
+---next writes that line. A span remembers its text; once the program writes over it, the
+---span no longer counts.
 ---@param buf integer
 function M.attach_osc8(buf)
   local open
   local group = vim.api.nvim_create_augroup("duet.links.osc8." .. buf, { clear = true })
-  osc8_spans[buf] = { by_id = {}, order = {}, count = 0 }
+  osc8_spans[buf] = { by_id = {}, order = {}, count = 0, pending = {} }
+  vim.api.nvim_buf_attach(buf, false, {
+    on_lines = function(_, _, _, first, _, last_new)
+      if not osc8_spans[buf] then
+        return true -- detach
+      end
+      capture_lines(buf, first, last_new)
+    end,
+  })
   vim.api.nvim_create_autocmd("BufUnload", {
     group = group,
     buffer = buf,
@@ -796,10 +831,27 @@ function M.attach_osc8(buf)
       if not ok then
         return
       end
-      add_span(buf, id, { uri = start.uri, s_cell = start.col, e_cell = cursor[2] })
+      local span = { uri = start.uri, s_cell = start.col, e_cell = cursor[2] }
+      add_span(buf, id, span)
+      -- Neovim may deliver TermRequest before or after it writes the output around the
+      -- sequence to the buffer (after, for longer output). Text in the link's cells means
+      -- it was written: take it now. Otherwise wait for the write. Old text in those cells
+      -- makes the span look stale once the new text is written, so it is dropped then.
+      local line = vim.api.nvim_buf_get_lines(buf, start.row - 1, start.row, false)[1] or ""
+      if line:sub(M.cell_to_byte(line, span.s_cell) + 1, M.cell_to_byte(line, span.e_cell)):find("%S") then
+        span.line = line
+        vim.schedule(function()
+          settle_span(buf, id)
+        end)
+        return
+      end
+      osc8_spans[buf].pending[id] = true
       vim.defer_fn(function()
-        settle_span(buf, id)
-      end, OSC8_SETTLE_MS)
+        local store = osc8_spans[buf]
+        if store and store.pending[id] then
+          drop_span(buf, id)
+        end
+      end, OSC8_TIMEOUT_MS)
     end,
   })
 end

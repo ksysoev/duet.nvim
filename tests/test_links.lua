@@ -513,6 +513,16 @@ T["terminal"]["a file that fails to open leaves the layout as it was"]["with %s"
   eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
 end
 
+T["terminal"]["ignores text written over an OSC 8 link right after it"] = function()
+  -- The row is rewritten before duet could have read it on a fixed delay.
+  local target = "file://" .. root .. "/a.lua"
+  agent(osc8(target, "LINK", "x ") .. "; sleep 0.015; printf '\\033[1A\\rx OTHER text\\n'")
+  child.lua("cursor_on('OTHER')")
+  require_osc8()
+  child.type_keys("gf")
+  eq(child.lua_get("where().terminal"), true)
+end
+
 -- open() -------------------------------------------------------------------------
 
 T["open()"] = MiniTest.new_set({ hooks = { pre_case = start, post_once = child.stop } })
