@@ -554,6 +554,7 @@ local function release(self)
     pcall(vim.fn.jobstop, self.job)
   end
   remove_run_dir(self.run_dir)
+  require("duet.watch").refresh()
 end
 
 ---Whether `win` is the only non-floating window of its tab (it can't be closed then).
@@ -863,6 +864,7 @@ local function on_exit(self, code)
   self.job = nil
   self.exit_code = code
   remove_run_dir(self.run_dir)
+  require("duet.watch").refresh()
   if self.stopping then
     return
   end
@@ -1153,6 +1155,7 @@ function Session.new(agent, opts)
   require("duet.log").debug("session %s: started %s in %s", id, table.concat(plan.argv, " "), root)
   sessions[id] = self
   setup_buffer(self)
+  require("duet.watch").refresh()
   if win then
     take_screen(self, win)
   end
