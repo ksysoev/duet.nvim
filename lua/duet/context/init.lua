@@ -219,7 +219,8 @@ end
 ---Capture the context for a command or API call: the buffer, window, cursor and range,
 ---as they are now. Call it before anything changes windows (showing the agent, opening a
 ---picker). From the agent's terminal (or another non-code buffer) it captures the code
----window instead, and ignores the range, which was about the terminal.
+---window instead, and ignores the range, which was about the terminal; with no code
+---window in the tab, it captures the current window without a range.
 ---@param opts? duet.CaptureOpts
 ---@return duet.Context
 function M.capture(opts)
@@ -228,7 +229,8 @@ function M.capture(opts)
   local win = code_window()
   local buf = vim.api.nvim_win_get_buf(win)
   local range
-  if win == vim.api.nvim_get_current_win() then
+  -- A range or selection made in a terminal (or other non-code buffer) is not code.
+  if win == vim.api.nvim_get_current_win() and is_code(buf) then
     range = command_range(buf, opts, mode)
   end
 

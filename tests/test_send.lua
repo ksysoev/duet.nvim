@@ -649,6 +649,23 @@ C["ask reports a failed provider"] = function()
   eq(child.lua_get("#require('duet.terminal').list()"), 0)
 end
 
+C["send from a tab with only the agent's terminal sends no selection"] = function()
+  fake()
+  child.lua([[
+    assert(require("duet.terminal").open())
+    vim.cmd("only")
+    vim.cmd.stopinsert()
+  ]])
+  child.cmd("1,1Duet send Refactor {selection}")
+  eq(
+    child.lua_get("_G.notes[#_G.notes].msg"),
+    "[duet] send: nothing to send: {selection} is empty (no range or selection given: use :'<,'> or a visual-mode mapping)"
+  )
+  child.lua("vim.wait(200)")
+  -- The agent created its output file when it started; nothing was written to it.
+  eq(child.lua_get("_G.read(_G.out) or ''"), "")
+end
+
 C["prompt expands what was typed, with the context from before the input"] = function()
   fake()
   code()

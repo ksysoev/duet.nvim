@@ -762,6 +762,20 @@ C["paths are relative to the session the text goes to"] = function()
   eq(child.lua_get("_G.got.claude"), { true, "claude" })
 end
 
+C["a tab with only a terminal gives no range"] = function()
+  child.lua([[
+    vim.cmd("tabnew | terminal printf 'agent line 1\\nagent line 2\\n'; sleep 5")
+    vim.wait(300)
+    vim.cmd.stopinsert()
+    vim.keymap.set("x", "<F2>", "<Cmd>Duet probe<CR>")
+  ]])
+  child.cmd("1,2Duet probe")
+  eq(child.lua_get("{ vim.bo[_G.ctx.buf].buftype, _G.ctx.range or vim.NIL }"), { "terminal", vim.NIL })
+  child.type_keys("gg", "V", "j", "<F2>")
+  eq(child.lua_get("_G.ctx.range or vim.NIL"), vim.NIL)
+  eq(child.lua_get("require('duet.context').get('selection', _G.ctx) or vim.NIL"), vim.NIL)
+end
+
 C["uses the agent asked for"] = function()
   child.lua([[
     require("duet.agents").register({
