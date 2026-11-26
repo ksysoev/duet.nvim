@@ -73,7 +73,19 @@ T["render()"]["cases"] = MiniTest.new_set({
       {},
     },
     { "two blocks on one line", "{code} {code}", "```\nx = 1\n```\n```\nx = 1\n```", { "code" }, {} },
-    { "used in order of first use", "{none} {word} {none}", " WORD ", { "none", "word" }, { "none" } },
+    { "used in order of first use", "{none} {word} {none}", "WORD", { "none", "word" }, { "none" } },
+    {
+      "empty at the start drops the space after it",
+      "{none} tail {word}",
+      "tail WORD",
+      { "none", "word" },
+      { "none" },
+    },
+    { "empty in the middle leaves one space", "a {none} b", "a b", { "none" }, { "none" } },
+    { "empty after indentation keeps it", "  - {none} b", "  - b", { "none" }, { "none" } },
+    { "empty glued to text keeps the space", "a{none} b", "a b", { "none" }, { "none" } },
+    { "empty at the end drops trailing spaces", "Fix {none}", "Fix", { "none" }, { "none" } },
+    { "lines without placeholders keep their spaces", "  keep  \n{word}", "  keep  \nWORD", { "word" }, {} },
   },
 })
 
@@ -115,7 +127,7 @@ T["expand()"] = MiniTest.new_set()
 T["expand()"]["cases"] = MiniTest.new_set({
   parametrize = {
     { "no placeholders", "hello", { text = "hello" } },
-    { "some empty", "{word} {none}", { text = "WORD " } },
+    { "some empty", "{word} {none}", { text = "WORD" } },
     { "all empty", "Refactor {none}", { err = "nothing to send: {none} is empty" } },
     { "several empty", "{none} {blank}", { err = "nothing to send: {none}, {blank} are empty" } },
     { "unknown only", "{foo}", { text = "{foo}" } },
@@ -132,7 +144,7 @@ T["expand()"]["cases"] = MiniTest.new_set({
     {
       "a failure next to content is a warning",
       "{word} {bad}",
-      { text = "WORD ", warning = '{bad} returned "text", expected { text, data } or nil' },
+      { text = "WORD", warning = '{bad} returned "text", expected { text, data } or nil' },
     },
   },
 })

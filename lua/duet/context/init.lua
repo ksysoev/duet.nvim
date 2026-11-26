@@ -378,7 +378,8 @@ end
 ---Replace `{name}` placeholders in `template` with what the providers return. Only
 ---registered names are replaced: other braces (`{foo}`, code, JSON) are left as typed.
 ---Provider text is not expanded again. A provider with nothing (or that failed, see
----`info.errors`) renders as "", and a line
+---`info.errors`) renders as "", together with the space after it when there is one before
+---it; a line that held a placeholder loses its trailing spaces, and a line
 ---that held a placeholder and is blank after rendering is dropped. Block results (code,
 ---lists) go on lines of their own, splitting the line around them.
 ---@param template string
@@ -413,7 +414,11 @@ function M.render(template, ctx)
     local function flush()
       local text = table.concat(current)
       current = {}
-      if not had or vim.trim(text) ~= "" then
+      if had then
+        -- Trailing spaces left by an empty placeholder ("Fix {none}").
+        text = text:gsub("%s+$", "")
+      end
+      if not had or text ~= "" then
         out[#out + 1] = text
       end
     end
@@ -440,6 +445,14 @@ function M.render(template, ctx)
           line, e = (line:sub(e + 1):gsub("^%s+", "")), 0
         elseif result then
           current[#current + 1] = result.text
+        else
+          -- Empty: drop the space after it when there is one before it (or it starts the
+          -- line), so "a {none} b" is "a b" and "{none} b" is "b". Indentation stays.
+          local before = table.concat(current)
+          if before == "" or before:match("%s$") then
+            local next_char = line:find("%S", e + 1)
+            e = (next_char or #line + 1) - 1
+          end
         end
       end
       pos = e + 1
