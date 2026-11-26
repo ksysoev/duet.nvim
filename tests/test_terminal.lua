@@ -406,6 +406,7 @@ T["exit"]["the hint names only the keys duet mapped"] = MiniTest.new_set({
     { "defaults", {}, "In the terminal, press i to restart the agent or q to close it." },
     { "q = hide", { q = "hide" }, "In the terminal, press i to restart the agent." },
     { "i = hide", { i = "hide" }, "In the terminal, press a to restart the agent or q to close it." },
+    { "q = open_link", { q = "open_link" }, "In the terminal, press i to restart the agent." },
   },
 })
 

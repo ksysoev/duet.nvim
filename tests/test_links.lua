@@ -1,0 +1,403 @@
+local MiniTest = require("mini.test")
+local h = dofile("tests/helpers.lua")
+local eq = MiniTest.expect.equality
+
+local T = MiniTest.new_set()
+
+-- parse() ----------------------------------------------------------------------
+
+---@param path string
+---@param s integer
+---@param e integer
+---@param extra? table line, end_line, col
+local function link(path, s, e, extra)
+  return vim.tbl_extend("force", { path = path, s = s, e = e }, extra or {})
+end
+
+-- Lines as Claude Code and the tools it runs print them.
+T["parse()"] = MiniTest.new_set({
+  parametrize = {
+    { "path:line", "see lua/duet/init.lua:10 now", { link("lua/duet/init.lua", 5, 24, { line = 10 }) } },
+    { "path:line:col", "lua/duet/init.lua:10:5", { link("lua/duet/init.lua", 1, 22, { line = 10, col = 5 }) } },
+    { "path:line-line", "init.lua:10-20", { link("init.lua", 1, 14, { line = 10, end_line = 20 }) } },
+    { "path:Lline-Lline", "a.lua:L10-L20", { link("a.lua", 1, 13, { line = 10, end_line = 20 }) } },
+    { "path:Lline", "a.lua:L7", { link("a.lua", 1, 8, { line = 7 }) } },
+    { "path#Lline", "a.lua#L10", { link("a.lua", 1, 9, { line = 10 }) } },
+    { "path#Lline-Lline", "a.lua#L10-L20", { link("a.lua", 1, 13, { line = 10, end_line = 20 }) } },
+    { "path#Lline-line", "a.lua#L10-20", { link("a.lua", 1, 12, { line = 10, end_line = 20 }) } },
+    { "path#LlineCcol", "a.lua#L10C5", { link("a.lua", 1, 11, { line = 10, col = 5 }) } },
+    { "@path", "look at @lua/duet/init.lua", { link("lua/duet/init.lua", 9, 26) } },
+    {
+      "@path (lines a-b), as duet sends it",
+      "@lua/duet/init.lua (lines 10-20)",
+      { link("lua/duet/init.lua", 1, 32, { line = 10, end_line = 20 }) },
+    },
+    { "@path (line n)", "@lua/x.lua (line 4) next", { link("lua/x.lua", 1, 19, { line = 4 }) } },
+    { "in backticks", "use `lua/duet/init.lua:42` here", { link("lua/duet/init.lua", 6, 25, { line = 42 }) } },
+    { "bare name in backticks", "edit `Makefile` first", { link("Makefile", 7, 14) } },
+    { "bare name with a line", "Makefile:12", { link("Makefile", 1, 11, { line = 12 }) } },
+    { "tool call header", "⏺ Read(lua/duet/init.lua)", { link("lua/duet/init.lua", 10, 26) } },
+    { "tool result", "  ⎿  Wrote 120 lines to tests/test_links.lua", { link("tests/test_links.lua", 27, 46) } },
+    { "box drawing around", "│ a.lua:3 │", { link("a.lua", 5, 11, { line = 3 }) } },
+    {
+      "two links on a line",
+      "a.lua:3 and b/c.lua:4",
+      { link("a.lua", 1, 7, { line = 3 }), link("b/c.lua", 13, 21, { line = 4 }) },
+    },
+    { "go compiler error", "./foo.go:12:3: undefined: x", { link("./foo.go", 1, 13, { line = 12, col = 3 }) } },
+    { "lua error", "lua/duet/x.lua:10: attempt to index nil", { link("lua/duet/x.lua", 1, 17, { line = 10 }) } },
+    { "rust error", "  --> src/main.rs:10:5", { link("src/main.rs", 7, 22, { line = 10, col = 5 }) } },
+    { "js stack frame", "    at f (/abs/a.js:10:5)", { link("/abs/a.js", 11, 24, { line = 10, col = 5 }) } },
+    { "python traceback", '  File "x.py", line 10, in f', { link("x.py", 9, 22, { line = 10 }) } },
+    { "absolute path", "/Users/me/p/a.lua:3", { link("/Users/me/p/a.lua", 1, 19, { line = 3 }) } },
+    { "home path", "~/notes.md", { link("~/notes.md", 1, 10) } },
+    { "parent path", "../a.lua:3", { link("../a.lua", 1, 10, { line = 3 }) } },
+    { "diff stat", " lua/duet/links.lua | 30 +++", { link("lua/duet/links.lua", 2, 19) } },
+    { "markdown bold", "**lua/a.lua**", { link("lua/a.lua", 3, 11) } },
+    { "markdown link", "[x](lua/a.lua#L3)", { link("lua/a.lua", 5, 16, { line = 3 }) } },
+    { "trailing punctuation", "(see a.lua:3).", { link("a.lua", 6, 12, { line = 3 }) } },
+    { "trailing comma and colon", "a.lua:3, b.lua:", { link("a.lua", 1, 7, { line = 3 }), link("b.lua", 10, 14) } },
+    { "leading underscores", "__init__.py", { link("__init__.py", 1, 11) } },
+    { "file URI", "file:///abs/a%20b.lua#L3", { link("/abs/a b.lua", 1, 24, { line = 3 }) } },
+    { "reversed range", "a.lua:20-10", { link("a.lua", 1, 11, { line = 10, end_line = 20 }) } },
+    { "multibyte before", "é → a.lua:3", { link("a.lua", 8, 14, { line = 3 }) } },
+    { "https URL", "https://github.com/x/y/blob/main/a.lua#L10", {} },
+    { "time and plain words", "at 10:30 and/or not", { link("and/or", 10, 15) } },
+    { "number", "42", {} },
+    { "empty", "", {} },
+  },
+})
+
+T["parse()"]["finds %s"] = function(_, line, want)
+  eq(require("duet.links").parse(line), want)
+end
+
+-- parse_ref() --------------------------------------------------------------------
+
+T["parse_ref()"] = MiniTest.new_set({
+  parametrize = {
+    { "a path", "a.lua:3", false, { path = "a.lua", line = 3 } },
+    { "a relative OSC 8 target", "lua/a.lua#L5", false, { path = "lua/a.lua", line = 5 } },
+    { "a bare name when marked", "README", true, { path = "README" } },
+    { "a bare name unmarked", "README", false, nil },
+    { "a URL", "https://example.com/a.lua", true, nil },
+    { "a file URI with a host", "file://localhost/a.lua", false, { path = "/a.lua" } },
+  },
+})
+
+T["parse_ref()"]["parses %s"] = function(_, token, marked, want)
+  eq(require("duet.links").parse_ref(token, marked), want)
+end
+
+-- resolve() ----------------------------------------------------------------------
+
+T["resolve()"] = MiniTest.new_set()
+
+local function repo()
+  return h.tmp_git_repo({ ["lua/a.lua"] = "a\n", ["top.lua"] = "top\n", ["dir/x.txt"] = "x\n" })
+end
+
+T["resolve()"]["finds a path relative to cwd"] = function()
+  local root = repo()
+  eq(require("duet.links").resolve("lua/a.lua", root), root .. "/lua/a.lua")
+end
+
+T["resolve()"]["falls back to the git root"] = function()
+  local root = repo()
+  eq(require("duet.links").resolve("top.lua", root .. "/lua"), root .. "/top.lua")
+end
+
+T["resolve()"]["prefers cwd over the git root"] = function()
+  local root = h.tmp_git_repo({ ["a.lua"] = "root\n", ["sub/a.lua"] = "sub\n" })
+  eq(require("duet.links").resolve("a.lua", root .. "/sub"), root .. "/sub/a.lua")
+end
+
+T["resolve()"]["takes absolute paths as they are"] = function()
+  local root = repo()
+  eq(require("duet.links").resolve(root .. "/top.lua", "/"), root .. "/top.lua")
+end
+
+T["resolve()"]["normalizes ./ and .."] = function()
+  local root = repo()
+  eq(require("duet.links").resolve("./lua/../top.lua", root), root .. "/top.lua")
+end
+
+T["resolve()"]["expands ~"] = function()
+  local home = h.tmp_dir()
+  vim.fn.writefile({ "x" }, home .. "/notes.md")
+  local saved = vim.env.HOME
+  vim.env.HOME = home
+  local abs = require("duet.links").resolve("~/notes.md", "/")
+  vim.env.HOME = saved
+  eq(abs, home .. "/notes.md")
+end
+
+T["resolve()"]["finds directories"] = function()
+  local root = repo()
+  eq(require("duet.links").resolve("dir", root), root .. "/dir")
+end
+
+T["resolve()"]["reports a missing file"] = function()
+  local root = repo()
+  local abs, err = require("duet.links").resolve("nope.lua", root)
+  eq(abs, nil)
+  eq(err, "links: no such file 'nope.lua'")
+end
+
+-- In a terminal ------------------------------------------------------------------
+
+local child = h.new_child()
+local root
+
+-- A child in a temporary repo, with a notify recorder and a fake agent that prints `out`.
+local function start()
+  root = h.tmp_git_repo({
+    ["lua/duet/init.lua"] = table.concat(
+      vim.tbl_map(function(n)
+        return "line " .. n
+      end, vim.fn.range(1, 40)),
+      "\n"
+    ) .. "\n",
+    ["a.lua"] = "a\n",
+    ["b.lua"] = "b\n",
+    ["c.lua"] = "c\n",
+  })
+  child.restart({ "-u", "tests/minimal_init.lua" })
+  child.o.columns, child.o.lines = 200, 50
+  child.fn.chdir(root)
+  child.lua([[
+    _G.notes = {}
+    vim.notify = function(msg, level)
+      table.insert(_G.notes, { msg = msg, level = level })
+    end
+    _G.T = require("duet.terminal")
+    _G.L = require("duet.links")
+    _G.wait = function(fn, ms)
+      return vim.wait(ms or 3000, fn, 10)
+    end
+    _G.agent = function(script, opts)
+      require("duet.agents").register({
+        name = "fake",
+        cmd = { "sh", "-c", script .. "; cat" },
+        capabilities = { mcp = false, plan_hook = false, system_prompt = false },
+        launch = function(self)
+          return { argv = vim.deepcopy(self.cmd), env = {}, files = {} }
+        end,
+      })
+      local base = { agent = "fake", terminal = { auto_insert = false } }
+      require("duet").setup(vim.tbl_deep_extend("force", base, opts or {}))
+      _G.s = assert(T.open())
+    end
+    -- Wait for `needle` in the terminal and put the cursor on it.
+    _G.cursor_on = function(needle)
+      local row, col
+      wait(function()
+        for i, line in ipairs(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)) do
+          col = line:find(needle, 1, true)
+          if col then
+            row = i
+            return true
+          end
+        end
+      end)
+      assert(row, "not in the terminal: " .. needle)
+      vim.api.nvim_set_current_win(s:window())
+      vim.api.nvim_win_set_cursor(0, { row, col - 1 })
+      return row
+    end
+    _G.where = function()
+      return {
+        name = vim.api.nvim_buf_get_name(0),
+        line = vim.fn.line("."),
+        col = vim.fn.col("."),
+        terminal = vim.bo.buftype == "terminal",
+      }
+    end
+  ]])
+end
+
+local function agent(script, opts)
+  child.lua("_G.agent(...)", { script, opts or {} })
+end
+
+local function rel(name)
+  return name:sub(#root + 2)
+end
+
+T["terminal"] = MiniTest.new_set({ hooks = { pre_case = start, post_once = child.stop } })
+
+T["terminal"]["gf opens the file at the line in the other window"] = function()
+  agent("printf 'see lua/duet/init.lua:10 now\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  child.lua("cursor_on('init.lua')")
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq(rel(at.name), "lua/duet/init.lua")
+  eq({ at.line, at.terminal }, { 10, false })
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+  eq(child.lua_get("s:is_visible()"), true)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["terminal"]["<CR> opens with the column"] = function()
+  agent("printf 'lua/duet/init.lua:12:3\\n'")
+  child.lua("cursor_on('lua/duet')")
+  child.type_keys("<CR>")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line, at.col }, { "lua/duet/init.lua", 12, 3 })
+end
+
+T["terminal"]["a missing file shows a notification"] = function()
+  agent("printf 'see missing/nope.lua:3\\n'")
+  child.lua("cursor_on('nope')")
+  child.type_keys("gf")
+  eq(child.lua_get("where().terminal"), true)
+  eq(child.lua_get("_G.notes"), { { msg = "[duet] links: no such file 'missing/nope.lua'", level = 3 } })
+  eq(child.lua_get("vim.v.errmsg"), "")
+end
+
+T["terminal"]["no link under the cursor shows a notification"] = function()
+  agent("printf 'nothing here\\n'")
+  child.lua("cursor_on('nothing')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), { { msg = "[duet] links: no file link under the cursor", level = 3 } })
+end
+
+T["terminal"]["a floating terminal is hidden"] = function()
+  agent("printf 'a.lua:1\\n'", { terminal = { layout = "float" } })
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("s:is_visible()"), false)
+end
+
+T["terminal"]["opens a split when there is no code window"] = function()
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua'); vim.cmd('only')")
+  child.type_keys("gf")
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("s:is_visible()"), true)
+  -- The terminal is on the right, so the file goes on the left.
+  eq(child.lua_get("vim.fn.winnr()"), 1)
+end
+
+T["terminal"]["]l and [l move between links that resolve"] = function()
+  agent("printf 'a.lua:1 nope.lua:2 b.lua:3\\nthen c.lua:4\\n'")
+  local row = child.lua_get("cursor_on('a.lua')")
+  local function pos()
+    return child.lua_get("vim.api.nvim_win_get_cursor(0)")
+  end
+  child.type_keys("]l")
+  eq(pos(), { row, 19 })
+  child.type_keys("]l")
+  eq(pos(), { row + 1, 5 })
+  child.type_keys("[l")
+  eq(pos(), { row, 19 })
+  child.type_keys("]l", "2[l")
+  eq(pos(), { row, 0 })
+  child.type_keys("[l")
+  eq(pos(), { row, 0 })
+  eq(child.lua_get("_G.notes[1].msg"), "[duet] links: no previous link in the visible output")
+end
+
+T["terminal"]["keys can be turned off"] = function()
+  agent("printf 'a.lua:1\\n'", { terminal = { keys = { gf = false } } })
+  local maps = child.lua_get([[vim.api.nvim_buf_call(s.buf, function()
+    return { vim.fn.maparg("gf", "n"), vim.fn.maparg("<CR>", "n", false, true).buffer }
+  end)]])
+  eq(maps, { "", 1 })
+end
+
+T["terminal"]["highlights links when enabled"] = function()
+  agent("printf 'see a.lua:1 and nope.lua:2\\n'", { links = { highlight = true, debounce_ms = 10 } })
+  child.lua("cursor_on('a.lua')")
+  local ok = child.lua_get([[wait(function()
+    local ns = vim.api.nvim_create_namespace("duet.links")
+    return #vim.api.nvim_buf_get_extmarks(s.buf, ns, 0, -1, {}) == 1
+  end)]])
+  eq(ok, true)
+  eq(child.lua_get("vim.fn.hlexists('DuetLink')"), 1)
+end
+
+T["terminal"]["does not highlight by default"] = function()
+  agent("printf 'see a.lua:1\\n'")
+  child.lua("cursor_on('a.lua'); vim.wait(150)")
+  local count = child.lua_get([[#vim.api.nvim_buf_get_extmarks(s.buf,
+    vim.api.nvim_create_namespace("duet.links"), 0, -1, {})]])
+  eq(count, 0)
+end
+
+T["terminal"]["follows OSC 8 hyperlinks"] = MiniTest.new_set({
+  parametrize = { { "file URI" }, { "relative path" } },
+})
+
+T["terminal"]["follows OSC 8 hyperlinks"]["with a %s"] = function(kind)
+  local target = kind == "file URI" and ("file://" .. root .. "/lua/duet/init.lua#L5") or "lua/duet/init.lua#L5"
+  agent(("printf '\\033]8;;%s\\033\\\\Open me\\033]8;;\\033\\\\ now\\n'"):format(target))
+  child.lua("cursor_on('Open me')")
+  local seen = child.lua_get([[wait(function()
+    return #vim.api.nvim_buf_get_extmarks(s.buf, vim.api.nvim_create_namespace("duet.links.osc8"), 0, -1, {}) > 0
+  end, 1000)]])
+  if not seen then
+    MiniTest.skip("TermRequest does not report OSC 8 on Neovim " .. tostring(child.lua_get("vim.version()")))
+  end
+  child.type_keys("w", "gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
+end
+
+T["terminal"]["ignores an OSC 8 span the program wrote over"] = function()
+  local target = "file://" .. root .. "/a.lua"
+  agent(
+    ("printf '\\033]8;;%s\\033\\\\Open me\\033]8;;\\033\\\\\\n'; sleep 0.2; printf '\\033[1A\\rOther b.lua\\n'"):format(
+      target
+    )
+  )
+  child.lua("cursor_on('Other')")
+  child.type_keys("gf")
+  -- The cursor is on "Other", where the stale link was: nothing opens.
+  eq(child.lua_get("where().terminal"), true)
+  child.lua("cursor_on('b.lua')")
+  child.type_keys("gf")
+  eq(rel(child.lua_get("where().name")), "b.lua")
+end
+
+-- open() -------------------------------------------------------------------------
+
+T["open()"] = MiniTest.new_set({ hooks = { pre_case = start, post_once = child.stop } })
+
+T["open()"]["clamps a line past the end and flashes the range"] = function()
+  local info = child.lua([[
+    assert(L.open({ path = "lua/duet/init.lua", line = 38, end_line = 99 }))
+    local ns = vim.api.nvim_create_namespace("duet.links.flash")
+    local marks = vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {})
+    return { line = vim.fn.line("."), flashed = #marks > 0 }
+  ]])
+  eq(info, { line = 38, flashed = true })
+  local cleared = child.lua_get([[wait(function()
+    return #vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace("duet.links.flash"), 0, -1, {}) == 0
+  end, 2000)]])
+  eq(cleared, true)
+end
+
+T["open()"]["adds a jump to the jumplist"] = function()
+  child.lua([[
+    assert(L.open({ path = "lua/duet/init.lua", line = 5 }))
+    assert(L.open({ path = "lua/duet/init.lua", line = 30 }))
+  ]])
+  child.type_keys("<C-o>")
+  eq(child.lua_get("vim.fn.line('.')"), 5)
+end
+
+T["open()"]["opens a directory"] = function()
+  child.fn.mkdir(root .. "/dir")
+  eq(child.lua_get("L.open({ path = 'dir' })"), true)
+end
+
+T["open()"]["returns an error for a missing file"] = function()
+  eq(child.lua_get("{ L.open({ path = 'nope.lua' }) }"), { vim.NIL, "links: no such file 'nope.lua'" })
+end
+
+return T

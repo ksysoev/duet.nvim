@@ -774,7 +774,7 @@ end
 local function user_keys()
   local keys = {}
   for lhs, action in pairs(config().keys) do
-    if action == "hide" then
+    if action and action ~= "normal_mode" then
       keys[vim.keycode(lhs)] = true
     end
   end
@@ -912,6 +912,28 @@ local function on_exit(self, code)
   end
 end
 
+-- Normal-mode key actions on links (see duet.links), with their descriptions.
+local LINK_ACTIONS = {
+  open_link = {
+    desc = "duet: open the file link under the cursor",
+    fn = function()
+      require("duet.links").follow()
+    end,
+  },
+  next_link = {
+    desc = "duet: next file link",
+    fn = function()
+      require("duet.links").jump(1)
+    end,
+  },
+  prev_link = {
+    desc = "duet: previous file link",
+    fn = function()
+      require("duet.links").jump(-1)
+    end,
+  },
+}
+
 ---@param self duet.Session
 local function set_keymaps(self)
   for lhs, action in pairs(config().keys) do
@@ -921,7 +943,20 @@ local function set_keymaps(self)
       vim.keymap.set({ "t", "n" }, lhs, function()
         self:hide()
       end, { buffer = self.buf, desc = "duet: hide the agent terminal" })
+    elseif LINK_ACTIONS[action] then
+      vim.keymap.set("n", lhs, LINK_ACTIONS[action].fn, { buffer = self.buf, desc = LINK_ACTIONS[action].desc })
     end
+  end
+end
+
+---Follow file links in the terminal: OSC 8 hyperlinks always, and underlining with
+---`links.highlight`. Read when the terminal starts.
+---@param self duet.Session
+local function attach_links(self)
+  local links = require("duet.links")
+  links.attach_osc8(self.buf)
+  if require("duet.config").get().links.highlight then
+    links.attach_highlighter(self.buf)
   end
 end
 
@@ -942,6 +977,7 @@ local function setup_buffer(self)
   vim.bo[buf].filetype = FILETYPE
   vim.b[buf].duet_session = self.id
   set_keymaps(self)
+  attach_links(self)
   vim.api.nvim_create_autocmd("BufEnter", {
     group = augroup,
     buffer = buf,

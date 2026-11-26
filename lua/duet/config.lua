@@ -11,6 +11,7 @@ local M = {}
 ---@field terminal table agent terminal options
 ---@field send table options for sending text to the agent
 ---@field prompts table<string, string|false> prompt templates for :Duet ask, by name
+---@field links table file links in agent output
 ---@field review table review options
 
 ---@type duet.Config
@@ -24,11 +25,21 @@ M.defaults = {
     split = { width = 80, height = 0.4, min_code_width = 20, min_code_height = 5 },
     close_on_exit = "success",
     auto_insert = true,
-    keys = { ["<C-q>"] = "normal_mode" },
+    keys = {
+      ["<C-q>"] = "normal_mode",
+      gf = "open_link",
+      ["<CR>"] = "open_link",
+      ["]l"] = "next_link",
+      ["[l"] = "prev_link",
+    },
   },
   send = {
     submit_delay_ms = 100,
     ready_timeout_ms = 10000,
+  },
+  links = {
+    highlight = false,
+    debounce_ms = 100,
   },
   prompts = {
     explain = "Explain {this}",
@@ -101,8 +112,10 @@ local function validate_border(v)
   return is_string_list(v) and vim.tbl_contains({ 1, 2, 4, 8 }, #v)
 end
 
+local KEY_ACTIONS = { "normal_mode", "hide", "open_link", "next_link", "prev_link" }
+
 local function validate_key_action(v)
-  return v == false or (type(v) == "string" and vim.tbl_contains({ "normal_mode", "hide" }, v))
+  return v == false or (type(v) == "string" and vim.tbl_contains(KEY_ACTIONS, v))
 end
 
 ---Schema keyed by dotted path. A `*` segment matches any key, e.g. "agents.*.cmd".
@@ -138,7 +151,13 @@ M.schema = {
   },
   ["terminal.auto_insert"] = { type = "boolean" },
   ["terminal.keys"] = { type = "table", open = true },
-  ["terminal.keys.*"] = { type = validate_key_action, desc = '"normal_mode", "hide" or false' },
+  ["terminal.keys.*"] = {
+    type = validate_key_action,
+    desc = '"normal_mode", "hide", "open_link", "next_link", "prev_link" or false',
+  },
+  links = { type = "table" },
+  ["links.highlight"] = { type = "boolean" },
+  ["links.debounce_ms"] = { type = validate_count, desc = "non-negative integer" },
   send = { type = "table" },
   ["send.submit_delay_ms"] = { type = validate_count, desc = "non-negative integer" },
   ["send.ready_timeout_ms"] = { type = validate_count, desc = "non-negative integer" },

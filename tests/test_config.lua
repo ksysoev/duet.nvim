@@ -33,7 +33,13 @@ local merge_cases = {
     check = function(c)
       eq(c.terminal.layout, "right")
       eq(c.terminal.float, { width = 0.5, height = 0.9, border = "rounded" })
-      eq(c.terminal.keys, { ["<C-q>"] = "normal_mode" })
+      eq(c.terminal.keys, {
+        ["<C-q>"] = "normal_mode",
+        gf = "open_link",
+        ["<CR>"] = "open_link",
+        ["]l"] = "next_link",
+        ["[l"] = "prev_link",
+      })
       eq(c.review, { a = { b = 1 } })
       eq(c.agent, "claude")
     end,
