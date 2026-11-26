@@ -8,10 +8,17 @@
 
 local M = {}
 
+---@class duet.watch.Watcher
+---@field handle uv.uv_fs_event_t
+---@field dev integer device of the directory when the watch started
+---@field ino integer inode of the directory when the watch started
+---@field broken boolean the watcher reported an error
+
 ---@class duet.watch.State
 ---@field active boolean watching: the autocmds are set and directories are watched
----@field dirs table<string, uv.uv_fs_event_t> watcher by directory
----@field pending table<string, true> directories changed since the last check
+---@field dirs table<string, duet.watch.Watcher> watcher by directory
+---@field failed table<string, true> directories that could not be watched, not tried again
+---@field pending table<string, true> directories to check
 ---@field timer uv.uv_timer_t|nil debounce timer while active
 ---@field augroup integer|nil autocmds while active
 ---@field saved_autoread boolean|nil global 'autoread' before duet turned it on, nil if untouched
@@ -19,12 +26,17 @@ local M = {}
 local state = {
   active = false,
   dirs = {},
+  failed = {},
   pending = {},
   timer = nil,
   augroup = nil,
   saved_autoread = nil,
   sync_scheduled = false,
 }
+
+-- Errors after which :checktime can run later: not allowed here (E523), textlock (E565),
+-- the command-line window (E11). Others are reported and not retried.
+local TRANSIENT_ERRORS = { "E11:", "E523:", "E565:" }
 
 local function config()
   return require("duet.config").get().watch
@@ -53,6 +65,24 @@ function M.dir_of(name, buftype, listed)
   return vim.fs.dirname(vim.fs.normalize(vim.fs.abspath(name)))
 end
 
+---Whether a check in `mode` (from nvim_get_mode()) must wait: in the command line or
+---its window, at a hit-enter or more prompt, or during a shell command, :checktime fails
+---or its prompt gets in the way.
+---@param mode { mode: string, blocking: boolean }
+---@param cmdwin boolean the command-line window is open
+---@return boolean
+function M.busy(mode, cmdwin)
+  return mode.blocking or cmdwin or mode.mode:match("^[cr!]") ~= nil
+end
+
+---Whether the user is typing in `mode`: in a terminal, Insert or Replace mode, or after
+---an operator. A W12 or W11 prompt there would take the next key typed as its answer.
+---@param mode string from nvim_get_mode()
+---@return boolean
+function M.typing(mode)
+  return mode:match("^[tiR]") ~= nil or mode:match("^no") ~= nil
+end
+
 ---The directory to watch for `buf`, or nil.
 ---@param buf integer
 ---@return string|nil
@@ -63,11 +93,41 @@ local function buffer_dir(buf)
   return M.dir_of(vim.api.nvim_buf_get_name(buf), vim.bo[buf].buftype, vim.bo[buf].buflisted)
 end
 
----@param path string
+---Whether :checktime on a changed `buf` would ask rather than reload it: it has unsaved
+---changes (W12), or 'autoread' is off for it (W11).
+---@param buf integer
 ---@return boolean
-local function is_directory(path)
+local function would_prompt(buf)
+  if vim.bo[buf].modified then
+    return true
+  end
+  -- 'autoread' is global-local: the buffer's value is nil unless set with :setlocal.
+  local autoread = vim.bo[buf].autoread
+  if autoread == nil then
+    autoread = vim.go.autoread
+  end
+  return not autoread
+end
+
+---@param err string
+---@return boolean
+local function is_transient(err)
+  for _, code in ipairs(TRANSIENT_ERRORS) do
+    if err:find(code, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+---@param path string
+---@return uv.fs_stat.result|nil
+local function dir_stat(path)
   local stat = vim.uv.fs_stat(path)
-  return stat ~= nil and stat.type == "directory"
+  if stat and stat.type == "directory" then
+    return stat
+  end
+  return nil
 end
 
 ---@param handle uv.uv_fs_event_t
@@ -75,6 +135,16 @@ local function close_handle(handle)
   handle:stop()
   if not handle:is_closing() then
     handle:close()
+  end
+end
+
+---@param dir string
+local function unwatch(dir)
+  local watcher = state.dirs[dir]
+  if watcher then
+    state.dirs[dir] = nil
+    close_handle(watcher.handle)
+    require("duet.log").trace("watch: stopped watching %s", dir)
   end
 end
 
@@ -90,88 +160,42 @@ local function debounce(flush)
   end)
 end
 
--- Modes in which :checktime could not run or its prompt would get in the way: the
--- command line, a hit-enter or more prompt, a shell command.
-local function busy()
-  local mode = vim.api.nvim_get_mode()
-  return mode.blocking or mode.mode:match("^[cr!]") ~= nil
-end
-
-local flush
-
----Run :checktime for the watched buffers in `dirs`, or all watched buffers if nil.
----Buffers that can't be checked now (e.g. under textlock) stay pending and are checked
----after another debounce.
----@param dirs? table<string, true>
-function M.checktime(dirs)
-  local retry = false
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local dir = buffer_dir(buf)
-    if dir and (dirs == nil or dirs[dir]) and vim.api.nvim_buf_is_loaded(buf) then
-      local ok, err = pcall(vim.cmd.checktime, buf)
-      if not ok then
-        require("duet.log").debug("watch: checktime %d failed, retrying: %s", buf, err)
-        state.pending[dir] = true
-        retry = true
-      end
-    end
-  end
-  if retry then
-    debounce(flush)
-  end
-end
-
----Check the directories that changed, unless the editor is busy: then wait again.
-flush = function()
-  if not state.active or next(state.pending) == nil then
-    return
-  end
-  if busy() then
-    debounce(flush)
-    return
-  end
-  local dirs = state.pending
-  state.pending = {}
-  M.checktime(dirs)
-end
-
-local schedule_sync
-
----Start watching `dir`. A failure (e.g. the inotify limit) is logged: the TermLeave and
----FocusGained checks still cover the directory's buffers.
+---Start watching `dir`. A failure (e.g. the inotify limit) is logged once: the directory
+---is not tried again until watching restarts, and the TermLeave and FocusGained checks
+---still cover its buffers.
 ---@param dir string
-local function watch(dir)
+---@param stat uv.fs_stat.result
+local function watch(dir, stat)
+  local log = require("duet.log")
   local handle, new_err = vim.uv.new_fs_event()
   if not handle then
-    require("duet.log").warn("watch: cannot create a watcher for %s: %s", dir, new_err)
+    state.failed[dir] = true
+    log.warn("watch: cannot create a watcher for %s: %s", dir, new_err)
     return
   end
+  ---@type duet.watch.Watcher
+  local watcher = { handle = handle, dev = stat.dev, ino = stat.ino, broken = false }
   local ok, err = handle:start(dir, {}, function(event_err)
+    -- A fast event: only mark the directory, the flush does the rest.
     if event_err then
-      -- E.g. the directory is gone: drop the watcher, sync() adds it back if it returns.
-      vim.schedule(function()
-        if state.dirs[dir] == handle then
-          state.dirs[dir] = nil
-          close_handle(handle)
-          require("duet.log").debug("watch: stopped watching %s: %s", dir, event_err)
-          schedule_sync()
-        end
-      end)
-      return
+      watcher.broken = true
     end
     state.pending[dir] = true
-    debounce(flush)
+    debounce(M.flush)
   end)
   if not ok then
     close_handle(handle)
-    require("duet.log").warn("watch: cannot watch %s: %s", dir, err)
+    state.failed[dir] = true
+    log.warn("watch: cannot watch %s: %s", dir, err)
     return
   end
-  state.dirs[dir] = handle
-  require("duet.log").trace("watch: watching %s", dir)
+  state.dirs[dir] = watcher
+  log.trace("watch: watching %s", dir)
 end
 
----Watch the directories of the listed file buffers, and only those.
+---Watch the directories of the listed file buffers, and only those. A watcher whose
+---directory is gone, was replaced (removed and created again) or reported an error is
+---closed, and the directory is watched again if it exists.
 function M.sync()
   state.sync_scheduled = false
   if not state.active then
@@ -181,31 +205,95 @@ function M.sync()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     local dir = buffer_dir(buf)
     if dir and want[dir] == nil then
-      want[dir] = is_directory(dir)
+      want[dir] = dir_stat(dir) or false
     end
   end
-  for dir, handle in pairs(state.dirs) do
-    if not want[dir] then
-      state.dirs[dir] = nil
-      close_handle(handle)
-      require("duet.log").trace("watch: stopped watching %s", dir)
+  for dir, watcher in pairs(state.dirs) do
+    local stat = want[dir]
+    if not stat or watcher.broken or stat.ino ~= watcher.ino or stat.dev ~= watcher.dev then
+      unwatch(dir)
     end
   end
-  for dir, exists in pairs(want) do
-    if exists and not state.dirs[dir] then
-      watch(dir)
+  for dir, stat in pairs(want) do
+    if stat and not state.dirs[dir] and not state.failed[dir] then
+      watch(dir, stat)
     end
   end
 end
 
 ---Sync once the current event is done: BufDelete and BufWipeout fire while the buffer
 ---is still listed. Several calls in a row sync once.
-schedule_sync = function()
+local function schedule_sync()
   if state.sync_scheduled then
     return
   end
   state.sync_scheduled = true
   vim.schedule(M.sync)
+end
+
+---Run :checktime for the watched buffers in `dirs`. While the user is typing, buffers
+---that would prompt stay pending until the mode changes. Buffers that can't be checked
+---now (textlock) stay pending and are retried after another debounce; other errors are
+---reported and dropped.
+---@param dirs table<string, true>
+local function check(dirs)
+  local typing = M.typing(vim.api.nvim_get_mode().mode)
+  local retry = false
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local dir = buffer_dir(buf)
+    if dir and dirs[dir] and vim.api.nvim_buf_is_loaded(buf) then
+      if typing and would_prompt(buf) then
+        state.pending[dir] = true
+      else
+        local ok, err = pcall(vim.cmd.checktime, buf)
+        if not ok then
+          err = tostring(err)
+          if is_transient(err) then
+            require("duet.log").debug("watch: checktime %d failed, retrying: %s", buf, err)
+            state.pending[dir] = true
+            retry = true
+          else
+            local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":~:.")
+            require("duet.util").notify(("watch: cannot check %s: %s"):format(name, err), vim.log.levels.WARN)
+          end
+        end
+      end
+    end
+  end
+  if retry then
+    debounce(M.flush)
+  end
+end
+
+---Check the pending directories, unless the editor is busy: then wait again. Watchers are
+---synced first, so a directory that was replaced is watched again.
+function M.flush()
+  if not state.active or next(state.pending) == nil then
+    return
+  end
+  if M.busy(vim.api.nvim_get_mode(), vim.fn.getcmdwintype() ~= "") then
+    debounce(M.flush)
+    return
+  end
+  local dirs = state.pending
+  state.pending = {}
+  M.sync()
+  check(dirs)
+end
+
+---Check every watched buffer now, as on leaving the agent's terminal or gaining focus.
+---Waits like a change on disk does while the editor is busy or the user is typing.
+function M.checktime()
+  if not state.active then
+    return
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local dir = buffer_dir(buf)
+    if dir then
+      state.pending[dir] = true
+    end
+  end
+  M.flush()
 end
 
 local function set_autocmds()
@@ -216,14 +304,38 @@ local function set_autocmds()
     desc = "duet: watch the directories of file buffers",
     callback = schedule_sync,
   })
+  vim.api.nvim_create_autocmd("OptionSet", {
+    group = group,
+    pattern = { "buflisted", "buftype" },
+    desc = "duet: watch the directories of file buffers",
+    callback = schedule_sync,
+  })
+  vim.api.nvim_create_autocmd("OptionSet", {
+    group = group,
+    pattern = "autoread",
+    desc = "duet: keep the 'autoread' the user sets",
+    callback = function()
+      if vim.v.option_type ~= "local" then
+        state.saved_autoread = nil
+      end
+    end,
+  })
+  -- Checks that waited for the user to stop typing, or for the command line to close.
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    group = group,
+    desc = "duet: check files that waited for a mode change",
+    callback = function()
+      if next(state.pending) ~= nil then
+        vim.schedule(M.flush)
+      end
+    end,
+  })
   vim.api.nvim_create_autocmd("TermLeave", {
     group = group,
     desc = "duet: check for files the agent changed",
     callback = function(ev)
       if vim.bo[ev.buf].filetype == "duet_terminal" then
-        vim.schedule(function()
-          M.checktime()
-        end)
+        vim.schedule(M.checktime)
       end
     end,
   })
@@ -231,9 +343,7 @@ local function set_autocmds()
     group = group,
     desc = "duet: check for files the agent changed",
     callback = function()
-      vim.schedule(function()
-        M.checktime()
-      end)
+      vim.schedule(M.checktime)
     end,
   })
 end
@@ -241,11 +351,12 @@ end
 local function start()
   state.active = true
   state.timer = assert(vim.uv.new_timer())
-  set_autocmds()
+  -- Before the autocmds: the OptionSet for 'autoread' is for the user's changes only.
   if config().autoread and not vim.go.autoread then
     state.saved_autoread = vim.go.autoread
     vim.go.autoread = true
   end
+  set_autocmds()
   require("duet.log").debug("watch: started")
   M.sync()
 end
@@ -257,10 +368,10 @@ function M.stop()
     return
   end
   state.active = false
-  for dir, handle in pairs(state.dirs) do
-    state.dirs[dir] = nil
-    close_handle(handle)
+  for dir in pairs(state.dirs) do
+    unwatch(dir)
   end
+  state.failed = {}
   state.pending = {}
   if state.timer then
     state.timer:stop()
@@ -271,8 +382,9 @@ function M.stop()
     pcall(vim.api.nvim_del_augroup_by_id, state.augroup)
     state.augroup = nil
   end
-  -- Leave 'autoread' alone if it was turned off since duet turned it on.
-  if state.saved_autoread ~= nil and vim.go.autoread then
+  -- After the autocmds are gone, so this is not taken for the user's change. A value the
+  -- user set while watching is kept (the OptionSet autocmd forgot the saved one).
+  if state.saved_autoread ~= nil then
     vim.go.autoread = state.saved_autoread
   end
   state.saved_autoread = nil
@@ -299,13 +411,18 @@ function M.refresh()
 end
 
 ---Internal state, for tests.
----@return { active: boolean, dirs: string[], augroup: integer|nil, timer: boolean, saved_autoread: boolean|nil }
+---@return { active: boolean, dirs: string[], failed: string[], pending: string[], augroup: integer|nil, timer: boolean, saved_autoread: boolean|nil }
 function M._state()
-  local dirs = vim.tbl_keys(state.dirs)
-  table.sort(dirs)
+  local function keys(t)
+    local list = vim.tbl_keys(t)
+    table.sort(list)
+    return list
+  end
   return {
     active = state.active,
-    dirs = dirs,
+    dirs = keys(state.dirs),
+    failed = keys(state.failed),
+    pending = keys(state.pending),
     augroup = state.augroup,
     timer = state.timer ~= nil,
     saved_autoread = state.saved_autoread,

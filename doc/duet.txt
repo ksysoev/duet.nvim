@@ -258,7 +258,7 @@ watch ~
         `boolean` (default: `true`)
         Turn on the global 'autoread' while watching, so unchanged buffers
         reload without asking. Its previous value comes back when the last
-        session stops, unless you changed it meanwhile. With `false`,
+        session stops, unless you set it meanwhile. With `false`,
         'autoread' is left as it is.
 
                                                             *duet-config-send*
@@ -846,22 +846,32 @@ overwritten: Neovim asks what to do, as for any file changed outside it
 (|W12|). An agent that writes the same file several times asks again
 after each write.
 
+So that a key you type does not answer that question, a buffer that would
+ask (unsaved changes, or 'autoread' off) is not checked while you type: in
+the agent's terminal, Insert or Replace mode, or after an operator. It is
+checked when the mode changes, e.g. when you leave terminal mode. Buffers
+that reload without asking are checked at once. Any check that would land
+while the command line, its window or a prompt is open waits until it is
+closed. A check that fails, e.g. because of an error in a |FileChangedShell|
+autocommand, is reported once and not retried.
+
 duet also checks the watched buffers when you leave the agent's terminal
 mode (|TermLeave|) and when Neovim gains focus (|FocusGained|), so a change
-the watchers missed shows up there. A check that would land while the
-command line or a prompt is open waits until it is closed.
+the watchers missed shows up there.
 
 Watching starts with the first running session and stops when the last one
 stops or exits; then every watcher is closed and 'autoread' is put back.
 Directories are watched rather than files, so files written by renaming a
 temporary file over them and files the agent creates for a buffer you
-already opened are noticed too. Buffers whose directory does not exist,
-and buffers that are not files (terminals, `duet://`, `oil://`, other URIs),
-are not watched. Turn watching off with: >lua
+already opened are noticed too. A watched directory that is removed and
+created again, as some generators do, is watched again. Buffers whose
+directory does not exist, and buffers that are not files (terminals,
+`duet://`, `oil://`, other URIs), are not watched. Turn watching off with: >lua
     watch = { enabled = false }
 <
 On Linux each directory uses one inotify watch. If the system limit
-(`fs.inotify.max_user_watches`) is reached, duet logs it and the directory
-is only checked on |TermLeave| and |FocusGained|.
+(`fs.inotify.max_user_watches`) is reached, duet logs it once and the
+directory is only checked on |TermLeave| and |FocusGained| until watching
+starts again.
 
  vim:tw=78:ts=8:noet:ft=help:norl:
