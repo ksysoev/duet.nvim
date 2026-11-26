@@ -18,8 +18,12 @@ local M = {}
 ---@field active boolean watching: the autocmds are set and directories are watched
 ---@field dirs table<string, duet.watch.Watcher> watcher by directory
 ---@field failed table<string, true> directories that could not be watched, not tried again
+---@field missing table<string, true> directories of buffers that do not exist (yet)
+---@field existed table<integer, boolean> whether each watched buffer's file existed when last seen
 ---@field pending table<string, true> directories to check
 ---@field timer uv.uv_timer_t|nil debounce timer while active
+---@field deadline integer|nil loop time (ms) by which the pending directories are checked
+---@field poll uv.uv_timer_t|nil polls the missing directories while there are any
 ---@field augroup integer|nil autocmds while active
 ---@field saved_autoread boolean|nil global 'autoread' before duet turned it on, nil if untouched
 ---@field sync_scheduled boolean a sync() is scheduled
@@ -27,8 +31,12 @@ local state = {
   active = false,
   dirs = {},
   failed = {},
+  missing = {},
+  existed = {},
   pending = {},
   timer = nil,
+  deadline = nil,
+  poll = nil,
   augroup = nil,
   saved_autoread = nil,
   sync_scheduled = false,
@@ -37,6 +45,15 @@ local state = {
 -- Errors after which :checktime can run later: not allowed here (E523), textlock (E565),
 -- the command-line window (E11). Others are reported and not retried.
 local TRANSIENT_ERRORS = { "E11:", "E523:", "E565:" }
+
+-- Changes that keep coming (a log file written every few ms) delay the check by at most
+-- this long, or debounce_ms if that is longer, so other directories still reload.
+local MAX_WAIT_MS = 1000
+-- Shortest wait before trying a check again that could not run (busy editor, textlock),
+-- so a debounce_ms of 0 does not spin.
+local RETRY_MS = 100
+-- How often directories that buffers need but that do not exist are looked for again.
+local POLL_MS = 1000
 
 local function config()
   return require("duet.config").get().watch
@@ -93,12 +110,22 @@ local function buffer_dir(buf)
   return M.dir_of(vim.api.nvim_buf_get_name(buf), vim.bo[buf].buftype, vim.bo[buf].buflisted)
 end
 
+---@param buf integer
+---@return boolean
+local function file_exists(buf)
+  return vim.uv.fs_stat(vim.api.nvim_buf_get_name(buf)) ~= nil
+end
+
 ---Whether :checktime on a changed `buf` would ask rather than reload it: it has unsaved
----changes (W12), or 'autoread' is off for it (W11).
+---changes (W12), its file was created since it was last seen (W13, even with
+---'autoread'), or 'autoread' is off for it (W11).
 ---@param buf integer
 ---@return boolean
 local function would_prompt(buf)
   if vim.bo[buf].modified then
+    return true
+  end
+  if state.existed[buf] == false and file_exists(buf) then
     return true
   end
   -- 'autoread' is global-local: the buffer's value is nil unless set with :setlocal.
@@ -148,16 +175,32 @@ local function unwatch(dir)
   end
 end
 
----Restart the debounce timer: check the pending directories once changes stop.
----Safe in a fast event (the fs_event callback).
-local function debounce(flush)
+---Flush in `delay` ms.
+---@param delay integer
+local function arm(delay)
   if not state.timer then
     return
   end
   state.timer:stop()
-  state.timer:start(config().debounce_ms, 0, function()
-    vim.schedule(flush)
+  state.timer:start(delay, 0, function()
+    vim.schedule(M.flush)
   end)
+end
+
+---Restart the debounce timer: check the pending directories once changes stop, but no
+---later than the deadline set by the first change. Safe in a fast event.
+local function debounce()
+  local wait = config().debounce_ms
+  local now = vim.uv.now()
+  if not state.deadline then
+    state.deadline = now + math.max(wait, MAX_WAIT_MS)
+  end
+  arm(math.max(0, math.min(wait, state.deadline - now)))
+end
+
+---Try a check that could not run again later.
+local function retry()
+  arm(math.max(config().debounce_ms, RETRY_MS))
 end
 
 ---Start watching `dir`. A failure (e.g. the inotify limit) is logged once: the directory
@@ -175,13 +218,16 @@ local function watch(dir, stat)
   end
   ---@type duet.watch.Watcher
   local watcher = { handle = handle, dev = stat.dev, ino = stat.ino, broken = false }
-  local ok, err = handle:start(dir, {}, function(event_err)
-    -- A fast event: only mark the directory, the flush does the rest.
-    if event_err then
+  local base = vim.fs.basename(dir)
+  local ok, err = handle:start(dir, {}, function(event_err, filename, events)
+    -- A fast event: only mark the directory, the flush does the rest. An event about the
+    -- directory itself (inotify reports its removal as a rename of its own name) means
+    -- the watch may be dead even if a new directory gets the same inode: watch again.
+    if event_err or (events and events.rename and (filename == nil or filename == "" or filename == base)) then
       watcher.broken = true
     end
     state.pending[dir] = true
-    debounce(M.flush)
+    debounce()
   end)
   if not ok then
     close_handle(handle)
@@ -193,31 +239,90 @@ local function watch(dir, stat)
   log.trace("watch: watching %s", dir)
 end
 
+local poll_missing
+
+---Poll the missing directories while there are any.
+local function update_poll()
+  if next(state.missing) == nil then
+    if state.poll then
+      state.poll:stop()
+      state.poll:close()
+      state.poll = nil
+    end
+    return
+  end
+  if state.poll then
+    return
+  end
+  local timer, err = vim.uv.new_timer()
+  if not timer then
+    require("duet.log").warn("watch: cannot poll for missing directories: %s", err)
+    return
+  end
+  state.poll = timer
+  timer:start(POLL_MS, POLL_MS, function()
+    vim.schedule(poll_missing)
+  end)
+end
+
 ---Watch the directories of the listed file buffers, and only those. A watcher whose
----directory is gone, was replaced (removed and created again) or reported an error is
----closed, and the directory is watched again if it exists.
+---directory is gone, was replaced (removed and created again) or reported an event about
+---itself is closed, and the directory is watched again if it exists. Directories that do
+---not exist are polled until they do.
 function M.sync()
   state.sync_scheduled = false
   if not state.active then
     return
   end
   local want = {}
+  local existed = {}
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     local dir = buffer_dir(buf)
-    if dir and want[dir] == nil then
-      want[dir] = dir_stat(dir) or false
+    if dir then
+      if want[dir] == nil then
+        want[dir] = dir_stat(dir) or false
+      end
+      -- Kept from when the buffer was first seen, so a file created since still counts
+      -- as new when its buffer is checked.
+      if state.existed[buf] == nil then
+        existed[buf] = file_exists(buf)
+      else
+        existed[buf] = state.existed[buf]
+      end
     end
   end
+  state.existed = existed
   for dir, watcher in pairs(state.dirs) do
     local stat = want[dir]
     if not stat or watcher.broken or stat.ino ~= watcher.ino or stat.dev ~= watcher.dev then
       unwatch(dir)
     end
   end
+  state.missing = {}
   for dir, stat in pairs(want) do
-    if stat and not state.dirs[dir] and not state.failed[dir] then
+    if not stat then
+      state.missing[dir] = true
+    elseif not state.dirs[dir] and not state.failed[dir] then
       watch(dir, stat)
     end
+  end
+  update_poll()
+end
+
+---Check the missing directories that exist now: watch them and check their buffers.
+poll_missing = function()
+  if not state.active then
+    return
+  end
+  local found = false
+  for dir in pairs(state.missing) do
+    if dir_stat(dir) then
+      state.pending[dir] = true
+      found = true
+    end
+  end
+  if found then
+    M.flush()
   end
 end
 
@@ -238,7 +343,7 @@ end
 ---@param dirs table<string, true>
 local function check(dirs)
   local typing = M.typing(vim.api.nvim_get_mode().mode)
-  local retry = false
+  local again = false
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     local dir = buffer_dir(buf)
     if dir and dirs[dir] and vim.api.nvim_buf_is_loaded(buf) then
@@ -246,12 +351,15 @@ local function check(dirs)
         state.pending[dir] = true
       else
         local ok, err = pcall(vim.cmd.checktime, buf)
+        if vim.api.nvim_buf_is_valid(buf) then
+          state.existed[buf] = file_exists(buf)
+        end
         if not ok then
           err = tostring(err)
           if is_transient(err) then
             require("duet.log").debug("watch: checktime %d failed, retrying: %s", buf, err)
             state.pending[dir] = true
-            retry = true
+            again = true
           else
             local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":~:.")
             require("duet.util").notify(("watch: cannot check %s: %s"):format(name, err), vim.log.levels.WARN)
@@ -260,8 +368,8 @@ local function check(dirs)
       end
     end
   end
-  if retry then
-    debounce(M.flush)
+  if again then
+    retry()
   end
 end
 
@@ -272,11 +380,12 @@ function M.flush()
     return
   end
   if M.busy(vim.api.nvim_get_mode(), vim.fn.getcmdwintype() ~= "") then
-    debounce(M.flush)
+    retry()
     return
   end
   local dirs = state.pending
   state.pending = {}
+  state.deadline = nil
   M.sync()
   check(dirs)
 end
@@ -303,6 +412,15 @@ local function set_autocmds()
     group = group,
     desc = "duet: watch the directories of file buffers",
     callback = schedule_sync,
+  })
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    desc = "duet: remember that the file exists",
+    callback = function(ev)
+      if state.existed[ev.buf] ~= nil then
+        state.existed[ev.buf] = true
+      end
+    end,
   })
   vim.api.nvim_create_autocmd("OptionSet", {
     group = group,
@@ -349,8 +467,13 @@ local function set_autocmds()
 end
 
 local function start()
+  local timer, err = vim.uv.new_timer()
+  if not timer then
+    require("duet.log").warn("watch: cannot start watching: %s", err)
+    return
+  end
   state.active = true
-  state.timer = assert(vim.uv.new_timer())
+  state.timer = timer
   -- Before the autocmds: the OptionSet for 'autoread' is for the user's changes only.
   if config().autoread and not vim.go.autoread then
     state.saved_autoread = vim.go.autoread
@@ -372,7 +495,11 @@ function M.stop()
     unwatch(dir)
   end
   state.failed = {}
+  state.missing = {}
+  state.existed = {}
   state.pending = {}
+  state.deadline = nil
+  update_poll()
   if state.timer then
     state.timer:stop()
     state.timer:close()
@@ -411,7 +538,7 @@ function M.refresh()
 end
 
 ---Internal state, for tests.
----@return { active: boolean, dirs: string[], failed: string[], pending: string[], augroup: integer|nil, timer: boolean, saved_autoread: boolean|nil }
+---@return { active: boolean, dirs: string[], failed: string[], missing: string[], poll: boolean, pending: string[], augroup: integer|nil, timer: boolean, saved_autoread: boolean|nil }
 function M._state()
   local function keys(t)
     local list = vim.tbl_keys(t)
@@ -422,6 +549,8 @@ function M._state()
     active = state.active,
     dirs = keys(state.dirs),
     failed = keys(state.failed),
+    missing = keys(state.missing),
+    poll = state.poll ~= nil,
     pending = keys(state.pending),
     augroup = state.augroup,
     timer = state.timer ~= nil,

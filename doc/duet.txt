@@ -253,6 +253,8 @@ watch ~
         `integer` (default: `100`)
         How long to wait after the last change on disk before checking the
         buffers, in milliseconds, so a burst of writes is checked once.
+        Changes that keep coming, such as a log written all the time, delay
+        the check by at most a second (or `debounce_ms`, if longer).
                                                   *duet-config-watch-autoread*
     autoread ~
         `boolean` (default: `true`)
@@ -847,7 +849,8 @@ overwritten: Neovim asks what to do, as for any file changed outside it
 after each write.
 
 So that a key you type does not answer that question, a buffer that would
-ask (unsaved changes, or 'autoread' off) is not checked while you type: in
+ask (unsaved changes, a file created since, or 'autoread' off) is not
+checked while you type: in
 the agent's terminal, Insert or Replace mode, or after an operator. It is
 checked when the mode changes, e.g. when you leave terminal mode. Buffers
 that reload without asking are checked at once. Any check that would land
@@ -862,11 +865,13 @@ the watchers missed shows up there.
 Watching starts with the first running session and stops when the last one
 stops or exits; then every watcher is closed and 'autoread' is put back.
 Directories are watched rather than files, so files written by renaming a
-temporary file over them and files the agent creates for a buffer you
-already opened are noticed too. A watched directory that is removed and
-created again, as some generators do, is watched again. Buffers whose
-directory does not exist, and buffers that are not files (terminals,
-`duet://`, `oil://`, other URIs), are not watched. Turn watching off with: >lua
+temporary file over them are noticed too. When the agent creates the file
+of a buffer you opened before it existed, Neovim tells you (|W13|) and
+offers to load it, as with |:checktime| by hand. A watched directory that
+is removed and created again, as some generators do, is watched again. A
+directory that does not exist (yet) is looked for once a second, and
+watched from when it appears. Buffers that are not files (terminals,
+`duet://`, `oil://`, other URIs) are not watched. Turn watching off with: >lua
     watch = { enabled = false }
 <
 On Linux each directory uses one inotify watch. If the system limit

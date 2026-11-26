@@ -51,6 +51,8 @@ T["helptags build without errors"] = function()
     "hl-DuetLink",
     "duet-watch",
     "duet-config-watch",
+    "duet-config-watch-enabled",
+    "duet-config-watch-debounce_ms",
     "duet-config-watch-autoread",
   }) do
     eq({ tag, vim.tbl_contains(names, tag) }, { tag, true })

@@ -6,7 +6,7 @@ local child = h.new_child()
 local dir
 
 -- _state() when nothing is watched.
-local IDLE = { active = false, dirs = {}, failed = {}, pending = {}, timer = false }
+local IDLE = { active = false, dirs = {}, failed = {}, missing = {}, pending = {}, poll = false, timer = false }
 
 -- Start a child with a fake agent and a temporary project with two files in two dirs.
 local function start(opts)
@@ -45,7 +45,11 @@ local function start(opts)
       if cmd then
         agent.cmd = cmd
       end
-      return assert(T.Session.new(agent, { root = root, hidden = true }))
+      local s = assert(T.Session.new(agent, { root = root, hidden = true }))
+      -- libuv starts FSEvents streams (macOS) on another thread: a write right after the
+      -- watch starts can be missed. Real sessions run long before the agent writes.
+      vim.wait(100)
+      return s
     end
     _G.write = function(path, text)
       local f = assert(io.open(path, "w"))
@@ -169,9 +173,56 @@ T["lifecycle"]["follows a buffer renamed with :file"] = function()
   eq(child.lua_get("W._state().dirs"), { dir .. "/sub" })
 end
 
-T["lifecycle"]["skips a directory that does not exist"] = function()
+T["lifecycle"]["polls for a directory that does not exist"] = function()
   child.lua("vim.cmd.edit(root .. '/a.txt'); vim.cmd.badd(root .. '/missing/c.txt'); session()")
   eq(child.lua_get("W._state().dirs"), { dir })
+  eq(child.lua_get("W._state().missing"), { dir .. "/missing" })
+  eq(child.lua_get("W._state().poll"), true)
+  vim.fn.mkdir(dir .. "/missing", "p")
+  eq(child.lua_get("wait(function() return #W._state().dirs == 2 end, 3000)"), true)
+  eq(child.lua_get("W._state().missing"), {})
+  eq(child.lua_get("W._state().poll"), false)
+end
+
+T["lifecycle"]["an event about the directory itself watches it again"] = function()
+  -- Fake watchers: a directory removed and created again may get the same inode (ext4),
+  -- so only the event tells that the old watch is dead.
+  child.lua([[
+    _G.fakes = {}
+    vim.uv.new_fs_event = function()
+      local fake = {}
+      function fake:start(_, _, cb) self.cb = cb; return 0 end
+      function fake:stop() return 0 end
+      function fake:close() self.closed = true end
+      function fake:is_closing() return self.closed == true end
+      table.insert(_G.fakes, fake)
+      return fake
+    end
+    vim.cmd.edit(root .. '/a.txt')
+    session()
+  ]])
+  eq(child.lua_get("#fakes"), 1)
+  -- A file renamed inside the directory keeps the watch.
+  child.lua("fakes[1].cb(nil, 'a.txt', { rename = true })")
+  child.lua("vim.wait(300)")
+  eq(child.lua_get("#fakes"), 1)
+  -- inotify reports the directory's own removal under its own name.
+  child.lua("fakes[1].cb(nil, vim.fs.basename(root), { rename = true })")
+  eq(child.lua_get("wait(function() return #fakes == 2 end)"), true)
+  eq(child.lua_get("fakes[1].closed"), true)
+  eq(child.lua_get("W._state().dirs"), { dir })
+end
+
+T["lifecycle"]["a timer that cannot be created leaves watching off"] = function()
+  child.lua([[
+    _G.new_timer = vim.uv.new_timer
+    vim.uv.new_timer = function() return nil, "EMFILE: too many open files" end
+    vim.cmd.edit(root .. '/a.txt')
+    _G.s = session()
+    vim.uv.new_timer = new_timer
+  ]])
+  eq(child.lua_get("s:is_running()"), true)
+  eq(child.lua_get("W._state()"), IDLE)
 end
 
 T["lifecycle"]["no watchers remain after all sessions stop"] = function()
@@ -404,6 +455,93 @@ T["reload"]["a directory removed and created again is watched again"] = function
   -- The new directory is watched.
   child.lua("write(root .. '/gen/x.txt', 'and changed later\\n')")
   eq(child.lua_get("wait(function() return lines(buf) == 'and changed later' end)"), true)
+end
+
+T["reload"]["a directory gone for a while is watched again when it returns"] = function()
+  start()
+  vim.fn.mkdir(dir .. "/gen", "p")
+  vim.fn.writefile({ "generated" }, dir .. "/gen/x.txt")
+  child.lua([[
+    vim.cmd.edit(root .. '/gen/x.txt')
+    _G.buf = vim.api.nvim_get_current_buf()
+    session()
+    vim.fn.delete(root .. '/gen', 'rf')
+  ]])
+  eq(child.lua_get("wait(function() return W._state().missing[1] == root .. '/gen' end)"), true)
+  child.lua("vim.fn.mkdir(root .. '/gen'); write(root .. '/gen/x.txt', 'back again\\n')")
+  eq(child.lua_get("wait(function() return lines(buf) == 'back again' end, 3000)"), true)
+  eq(child.lua_get("W._state().dirs"), { dir .. "/gen" })
+end
+
+T["reload"]["a file created in a new directory is noticed"] = function()
+  start()
+  child.lua([[
+    vim.cmd.edit(root .. '/later/x.txt')
+    session()
+    vim.v.warningmsg = ''
+    vim.fn.mkdir(root .. '/later')
+    write(root .. '/later/x.txt', 'created by the agent\n')
+  ]])
+  -- Neovim warns (W13) rather than loading it, as with :checktime by hand.
+  eq(child.lua_get("wait(function() return vim.v.warningmsg:find('W13', 1, true) ~= nil end, 3000)"), true)
+end
+
+T["reload"]["while typing, a created file waits like a modified buffer"] = function()
+  start()
+  child.lua([[
+    vim.cmd.edit(root .. '/new.txt')
+    session()
+    vim.v.warningmsg = ''
+    _G.get_mode = vim.api.nvim_get_mode
+    vim.api.nvim_get_mode = function() return { mode = "t", blocking = false } end
+    write(root .. '/new.txt', 'created by the agent\n')
+  ]])
+  eq(child.lua_get("wait(function() return #W._state().pending > 0 end)"), true)
+  child.lua("vim.wait(200)")
+  eq(child.lua_get("vim.v.warningmsg"), "")
+  child.lua("vim.api.nvim_get_mode = get_mode; vim.api.nvim_exec_autocmds('ModeChanged', {})")
+  eq(child.lua_get("wait(function() return vim.v.warningmsg:find('W13', 1, true) ~= nil end)"), true)
+end
+
+T["reload"]["a directory that keeps changing does not hold back the others"] = function()
+  start({ watch = { debounce_ms = 200 } })
+  child.lua([[
+    vim.cmd.edit(root .. '/a.txt')
+    vim.cmd.edit(root .. '/sub/b.txt')
+    _G.buf = vim.api.nvim_get_current_buf()
+    session()
+    -- A log written every 50 ms, faster than the debounce.
+    _G.noise = vim.uv.new_timer()
+    noise:start(0, 50, function()
+      local f = io.open(root .. '/noise.log', 'a')
+      f:write('x')
+      f:close()
+    end)
+    vim.wait(300)
+    write(root .. '/sub/b.txt', 'b changed\n')
+  ]])
+  eq(child.lua_get("wait(function() return lines(buf) == 'b changed' end, 3000)"), true)
+  child.lua("noise:stop(); noise:close()")
+end
+
+T["reload"]["waiting with no debounce does not spin"] = function()
+  start({ watch = { debounce_ms = 0 } })
+  child.lua([[
+    vim.cmd.edit(root .. '/a.txt')
+    _G.buf = vim.api.nvim_get_current_buf()
+    session()
+    _G.calls = 0
+    _G.get_mode = vim.api.nvim_get_mode
+    vim.api.nvim_get_mode = function()
+      _G.calls = _G.calls + 1
+      return { mode = "c", blocking = false }
+    end
+    write(root .. '/a.txt', 'later\n')
+  ]])
+  child.lua("vim.wait(500)")
+  child.lua("vim.api.nvim_get_mode = get_mode")
+  eq(child.lua_get("calls > 0 and calls < 20"), true)
+  eq(child.lua_get("wait(function() return lines(buf) == 'later' end)"), true)
 end
 
 T["reload"]["while typing, only buffers that reload without asking are checked"] = function()
