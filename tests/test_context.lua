@@ -34,6 +34,9 @@ local function fakes()
   context.register("bad", function()
     return "text"
   end)
+  context.register("spacey", function()
+    return { text = "foo ", data = {} }
+  end)
   context.register("braces", function()
     return { text = "{word} {file}", data = {} }
   end)
@@ -86,6 +89,10 @@ T["render()"]["cases"] = MiniTest.new_set({
     { "empty glued to text keeps the space", "a{none} b", "a b", { "none" }, { "none" } },
     { "empty at the end drops trailing spaces", "Fix {none}", "Fix", { "none" }, { "none" } },
     { "lines without placeholders keep their spaces", "  keep  \n{word}", "  keep  \nWORD", { "word" }, {} },
+    { "trailing spaces after content stay", "See {word}  \nthen", "See WORD  \nthen", { "word" }, {} },
+    { "a provider's trailing space stays", "{spacey}", "foo ", { "spacey" }, {} },
+    { "trailing spaces after an empty one go", "{word} {none}  ", "WORD", { "word", "none" }, { "none" } },
+    { "text after an empty one keeps its spaces", "{none} x  ", "x  ", { "none" }, { "none" } },
   },
 })
 

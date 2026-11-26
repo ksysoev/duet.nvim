@@ -391,7 +391,7 @@ end
 ---registered names are replaced: other braces (`{foo}`, code, JSON) are left as typed.
 ---Provider text is not expanded again. A provider with nothing (or that failed, see
 ---`info.errors`) renders as "", together with the space after it when there is one before
----it; a line that held a placeholder loses its trailing spaces, and a line
+---it; spaces at the end of a line after an empty placeholder are dropped, and a line
 ---that held a placeholder and is blank after rendering is dropped. Block results (code,
 ---lists) go on lines of their own, splitting the line around them.
 ---@param template string
@@ -431,12 +431,20 @@ function M.render(template, ctx)
 
   local out = {}
   for _, line in ipairs(vim.split(template, "\n", { plain = true })) do
-    local current, had = {}, false
+    -- `ends_empty`: nothing but spaces has come since an empty placeholder.
+    local current, had, ends_empty = {}, false, false
+    local function add(text)
+      current[#current + 1] = text
+      if text:find("%S") then
+        ends_empty = false
+      end
+    end
     local function flush()
       local text = table.concat(current)
       current = {}
-      if had then
-        -- Trailing spaces left by an empty placeholder ("Fix {none}").
+      if ends_empty then
+        -- Trailing spaces left by an empty placeholder ("Fix {none}"); other trailing
+        -- spaces (a Markdown line break, a provider's text) stay.
         text = text:gsub("%s+$", "")
       end
       if not had or text ~= "" then
@@ -449,10 +457,10 @@ function M.render(template, ctx)
       if not s then
         break
       end
-      current[#current + 1] = line:sub(pos, s - 1)
+      add(line:sub(pos, s - 1))
       local result = resolve(name)
       if result == nil then
-        current[#current + 1] = line:sub(s, e)
+        add(line:sub(s, e))
       else
         had = true
         if result and result.block then
@@ -460,13 +468,15 @@ function M.render(template, ctx)
           if before ~= "" then
             out[#out + 1] = before
           end
-          current = {}
+          current, ends_empty = {}, false
           out[#out + 1] = result.text
           -- Text after the block starts a new line.
           line, e = (line:sub(e + 1):gsub("^%s+", "")), 0
         elseif result then
           current[#current + 1] = result.text
+          ends_empty = false
         else
+          ends_empty = true
           -- Empty: drop the space after it when there is one before it (or it starts the
           -- line), so "a {none} b" is "a b" and "{none} b" is "b". Indentation stays.
           local before = table.concat(current)
@@ -478,7 +488,7 @@ function M.render(template, ctx)
       end
       pos = e + 1
     end
-    current[#current + 1] = line:sub(pos)
+    add(line:sub(pos))
     flush()
   end
   return table.concat(out, "\n"), info
