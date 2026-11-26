@@ -29,6 +29,7 @@ local osc8_ns = vim.api.nvim_create_namespace("duet.links.osc8")
 ---@field e_cell integer screen cell where it ends (exclusive)
 ---@field text? string its text, once it is in the buffer; the span counts while it stays
 ---@field line? string the text of its line when the terminal first wrote it, until settled
+---@field early? string the text of its line when TermRequest came, until settled
 
 ---@class duet.links.Spans
 ---@field by_id table<integer, duet.links.Span> by extmark id
@@ -384,7 +385,8 @@ local function settle_span(buf, id)
   local row, line = pos[1], span.line
   span.line = nil
   local s, e = M.cell_to_byte(line, span.s_cell), M.cell_to_byte(line, span.e_cell)
-  if e <= s then
+  -- Blank cells: the frame with the link was replaced before it was shown.
+  if e <= s or not line:sub(s + 1, e):find("%S") then
     drop_span(buf, id)
     return
   end
@@ -776,8 +778,10 @@ end
 
 -- OSC 8 ----------------------------------------------------------------------
 
--- A span whose line the terminal has not written this long after the link is dropped.
-local OSC8_TIMEOUT_MS = 500
+-- How long to wait for the terminal to write a link's line after TermRequest. Neovim
+-- writes terminal output to the buffer on a 10 ms timer, usually after TermRequest; with
+-- longer output, sometimes before it, and then no write follows.
+local OSC8_WRITE_WAIT_MS = 30
 
 ---Take the text of the lines the terminal just wrote for the spans waiting for it. This is
 ---the first write after the link, so the text is the link's: a later one may have written
@@ -795,6 +799,7 @@ local function capture_lines(buf, first, last)
     local row = pos[1]
     if row and row >= first and row < last then
       store.pending[id] = nil
+      store.by_id[id].early = nil
       store.by_id[id].line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
       vim.schedule(function()
         settle_span(buf, id)
@@ -858,25 +863,20 @@ function M.attach_osc8(buf)
       end
       local span = { uri = start.uri, s_cell = start.col, e_cell = cursor[2] }
       add_span(buf, id, span)
-      -- Neovim may deliver TermRequest before or after it writes the output around the
-      -- sequence to the buffer (after, for longer output). Text in the link's cells means
-      -- it was written: take it now. Otherwise wait for the write. Old text in those cells
-      -- makes the span look stale once the new text is written, so it is dropped then.
-      local line = vim.api.nvim_buf_get_lines(buf, start.row - 1, start.row, false)[1] or ""
-      if line:sub(M.cell_to_byte(line, span.s_cell) + 1, M.cell_to_byte(line, span.e_cell)):find("%S") then
-        span.line = line
-        vim.schedule(function()
-          settle_span(buf, id)
-        end)
-        return
-      end
+      -- The text is taken from the next write of the line (capture_lines). The line as it
+      -- is now may still hold the previous frame of a TUI such as Claude Code, so it only
+      -- counts when no write comes: Neovim wrote the line before delivering TermRequest.
+      -- Blank cells then drop the span (settle_span).
+      span.early = vim.api.nvim_buf_get_lines(buf, start.row - 1, start.row, false)[1] or ""
       osc8_spans[buf].pending[id] = true
       vim.defer_fn(function()
         local store = osc8_spans[buf]
         if store and store.pending[id] then
-          drop_span(buf, id)
+          store.pending[id] = nil
+          span.line, span.early = span.early, nil
+          settle_span(buf, id)
         end
-      end, OSC8_TIMEOUT_MS)
+      end, OSC8_WRITE_WAIT_MS)
     end,
   })
 end

@@ -564,6 +564,18 @@ T["terminal"]["a floating terminal that cannot be hidden opens nothing"] = funct
   eq(child.lua_get("_G.notes[1].msg"), "[duet] links: cannot open 'a.lua': cannot hide")
 end
 
+T["terminal"]["follows an OSC 8 link printed over the previous frame"] = function()
+  -- A TUI such as Claude Code redraws rows in place: when TermRequest comes, the row may
+  -- still hold the previous frame's text, which is not the link's.
+  local target = "file://" .. root .. "/lua/duet/init.lua#L5"
+  agent("printf 'x OLDOLDOLD\\n'; sleep 0.2; printf '\\033[1A\\r'; " .. osc8(target, "LINK", "x ", "      "))
+  child.lua("cursor_on('LINK')")
+  require_osc8()
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
+end
+
 T["terminal"]["ignores text written over an OSC 8 link right after it"] = function()
   -- The row is rewritten before duet could have read it on a fixed delay.
   local target = "file://" .. root .. "/a.lua"
