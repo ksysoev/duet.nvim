@@ -6,11 +6,25 @@ local child = h.new_child()
 local dir
 
 -- _state() when nothing is watched.
-local IDLE = { active = false, dirs = {}, failed = {}, missing = {}, pending = {}, poll = false, timer = false }
+local IDLE = {
+  active = false,
+  dirs = {},
+  failed = {},
+  missing = {},
+  native = false,
+  pending = {},
+  poll = false,
+  timer = false,
+}
 
 -- Start a child with a fake agent and a temporary project with two files in two dirs.
-local function start(opts)
+-- Neovim 0.13+ watches 'autoread' files itself, and duet then leaves it to Neovim: remove
+-- Neovim's watching so duet's own is tested, unless `native` is set.
+local function start(opts, native)
   child.setup()
+  if not native then
+    child.lua("pcall(vim.api.nvim_del_augroup_by_name, 'nvim.autoread')")
+  end
   dir = h.tmp_dir()
   vim.fn.mkdir(dir .. "/sub", "p")
   vim.fn.writefile({ "one" }, dir .. "/a.txt")
@@ -297,6 +311,25 @@ end
 T["lifecycle disabled"] = function()
   start({ watch = { enabled = false } })
   child.lua("vim.cmd.edit(root .. '/a.txt'); session()")
+  eq(child.lua_get("W._state()"), IDLE)
+end
+
+T["native"] = MiniTest.new_set()
+
+T["native"]["leaves watching to Neovim, and only turns on 'autoread'"] = function()
+  start({}, true)
+  -- A stand-in on Neovim versions that don't watch 'autoread' files themselves.
+  child.lua("if not W.native() then vim.api.nvim_create_augroup('nvim.autoread', {}) end")
+  child.lua("vim.go.autoread = false; vim.cmd.edit(root .. '/a.txt'); _G.s = session()")
+  local st = child.lua_get("W._state()")
+  eq({ st.active, st.native, st.dirs, st.timer }, { true, true, {}, false })
+  eq(child.lua_get("vim.go.autoread"), true)
+  -- No watchers come and go with buffers either.
+  child.lua("vim.cmd.edit(root .. '/sub/b.txt'); W.sync(); W.checktime()")
+  child.lua("vim.wait(50)")
+  eq(child.lua_get("W._state().dirs"), {})
+  child.lua("s:stop()")
+  eq(child.lua_get("vim.go.autoread"), false)
   eq(child.lua_get("W._state()"), IDLE)
 end
 

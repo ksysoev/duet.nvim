@@ -4,7 +4,8 @@
 --- buffers in the directories that changed: unchanged buffers reload (with 'autoread'),
 --- buffers with unsaved changes get the usual W12 prompt. Directories are watched rather
 --- than files, because a write to a temporary file renamed over the original leaves a
---- file watch on the old inode. See |duet-watch|.
+--- file watch on the old inode. Neovim 0.13 and later watch the files of 'autoread'
+--- buffers themselves: there duet only turns 'autoread' on. See |duet-watch|.
 
 local M = {}
 
@@ -28,6 +29,7 @@ local M = {}
 ---@field augroup integer|nil autocmds while active
 ---@field saved_autoread boolean|nil global 'autoread' before duet turned it on, nil if untouched
 ---@field sync_scheduled boolean a sync() is scheduled
+---@field native boolean Neovim watches 'autoread' files itself, duet only manages 'autoread'
 local state = {
   active = false,
   dirs = {},
@@ -41,6 +43,7 @@ local state = {
   augroup = nil,
   saved_autoread = nil,
   sync_scheduled = false,
+  native = false,
 }
 
 -- Errors after which :checktime can run later: not allowed here (E523), textlock (E565),
@@ -280,7 +283,7 @@ end
 ---not exist are polled until they do.
 function M.sync()
   state.sync_scheduled = false
-  if not state.active then
+  if not state.active or state.native then
     return
   end
   local want = {}
@@ -404,7 +407,7 @@ end
 ---Check every watched buffer now, as on leaving the agent's terminal or gaining focus.
 ---Waits like a change on disk does while the editor is busy or the user is typing.
 function M.checktime()
-  if not state.active then
+  if not state.active or state.native then
     return
   end
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -416,9 +419,32 @@ function M.checktime()
   M.flush()
 end
 
-local function set_autocmds()
+---Whether Neovim watches the files of 'autoread' buffers itself (0.13 and later, unless
+---its `nvim.autoread` autocmds were removed). duet's own watchers would check each change
+---twice, and Neovim's check would come first anyway.
+---@return boolean
+function M.native()
+  local ok = pcall(vim.api.nvim_get_autocmds, { group = "nvim.autoread" })
+  return ok
+end
+
+---@param native boolean only the 'autoread' bookkeeping: Neovim watches the files
+local function set_autocmds(native)
   local group = vim.api.nvim_create_augroup("duet.watch", { clear = true })
   state.augroup = group
+  vim.api.nvim_create_autocmd("OptionSet", {
+    group = group,
+    pattern = "autoread",
+    desc = "duet: keep the 'autoread' the user sets",
+    callback = function()
+      if vim.v.option_type ~= "local" then
+        state.saved_autoread = nil
+      end
+    end,
+  })
+  if native then
+    return
+  end
   vim.api.nvim_create_autocmd({ "BufAdd", "BufDelete", "BufWipeout", "BufFilePost", "BufWritePost" }, {
     group = group,
     desc = "duet: watch the directories of file buffers",
@@ -438,16 +464,6 @@ local function set_autocmds()
     pattern = { "buflisted", "buftype" },
     desc = "duet: watch the directories of file buffers",
     callback = schedule_sync,
-  })
-  vim.api.nvim_create_autocmd("OptionSet", {
-    group = group,
-    pattern = "autoread",
-    desc = "duet: keep the 'autoread' the user sets",
-    callback = function()
-      if vim.v.option_type ~= "local" then
-        state.saved_autoread = nil
-      end
-    end,
   })
   -- Checks that waited for the user to stop typing, or for the command line to close.
   vim.api.nvim_create_autocmd("ModeChanged", {
@@ -478,19 +494,29 @@ local function set_autocmds()
 end
 
 local function start()
-  local timer, err = vim.uv.new_timer()
-  if not timer then
-    require("duet.log").warn("watch: cannot start watching: %s", err)
-    return
+  local native = M.native()
+  local timer
+  if not native then
+    local err
+    timer, err = vim.uv.new_timer()
+    if not timer then
+      require("duet.log").warn("watch: cannot start watching: %s", err)
+      return
+    end
   end
   state.active = true
+  state.native = native
   state.timer = timer
   -- Before the autocmds: the OptionSet for 'autoread' is for the user's changes only.
   if config().autoread and not vim.go.autoread then
     state.saved_autoread = vim.go.autoread
     vim.go.autoread = true
   end
-  set_autocmds()
+  set_autocmds(native)
+  if native then
+    require("duet.log").debug("watch: started, Neovim watches 'autoread' files itself")
+    return
+  end
   require("duet.log").debug("watch: started")
   M.sync()
 end
@@ -502,6 +528,7 @@ function M.stop()
     return
   end
   state.active = false
+  state.native = false
   for dir in pairs(state.dirs) do
     unwatch(dir)
   end
@@ -567,6 +594,7 @@ function M._state()
     augroup = state.augroup,
     timer = state.timer ~= nil,
     saved_autoread = state.saved_autoread,
+    native = state.native,
   }
 end
 

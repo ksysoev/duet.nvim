@@ -874,6 +874,11 @@ watched from when it appears. Buffers that are not files (terminals,
 `duet://`, `oil://`, other URIs) are not watched. Turn watching off with: >lua
     watch = { enabled = false }
 <
+Neovim 0.13 and later watch the files of 'autoread' buffers themselves
+(see `:help 'autoread'` there). duet then leaves the watching to Neovim and
+only turns 'autoread' on while a session runs (|duet-config-watch-autoread|);
+what is described above about checks waiting while you type does not apply.
+
 On Linux each directory uses one inotify watch. If the system limit
 (`fs.inotify.max_user_watches`) is reached, duet logs it once and the
 directory is only checked on |TermLeave| and |FocusGained| until watching
