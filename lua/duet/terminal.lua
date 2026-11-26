@@ -1405,16 +1405,19 @@ local function visible()
   return nil
 end
 
----Find the session to act on: `name`'s session for the current root, or with no name
----the visible one, then current().
----@param name? string
+---The session that commands act on: `name`'s session for the current root, or with no
+---name the visible one, then current(). Never starts a session; one started for the
+---commands gets the root `root()`.
+---@param name? string agent name
 ---@return duet.Session|nil
-local function target(name)
+function M.target(name)
   if name then
     return M.find(name, M.root())
   end
   return visible() or M.current()
 end
+
+local target = M.target
 
 ---Open and focus the agent's session for the current root, starting it if needed.
 ---A session whose agent has exited is restarted, unless its terminal has not been seen

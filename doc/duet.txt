@@ -13,6 +13,7 @@ CONTENTS                                                       *duet-contents*
   8. Agents .................................................. |duet-agents|
   9. Terminal ................................................ |duet-terminal|
   10. Sending text ........................................... |duet-send|
+  11. Context and prompts .................................... |duet-context|
 
 ==============================================================================
 1. INTRODUCTION                                     *duet* *duet-introduction*
@@ -60,6 +61,11 @@ Defaults: >lua
         keys = { ["<C-q>"] = "normal_mode" },
       },
       send = { submit_delay_ms = 100, ready_timeout_ms = 10000 },
+      prompts = {
+        explain = "Explain {this}",
+        fix = "Fix {diagnostics}",
+        review = "Review {file}",
+      },
       review = {},
     }
 <
@@ -213,6 +219,19 @@ send ~
         for input: started, with its input prompt on screen rather than a
         dialog. After that the send fails. See |duet-send|.
 
+                                                         *duet-config-prompts*
+prompts ~
+    `table<string, string|false>`
+    Prompt templates for |:Duet-ask| and |duet.ask()|, by name: letters,
+    digits, `_` and `-`, since `:Duet ask` takes it as one word. A template
+    is text with placeholders such as `{this}` (see |duet-context|). Your
+    prompts are added to the defaults; set a default to `false` to remove
+    it: >lua
+        prompts = {
+          tests = "Write tests for {this}",
+          review = false,
+        }
+<
                                                           *duet-config-review*
 review ~
     `table` (default: `{}`)
@@ -248,18 +267,32 @@ review ~
     Stop the agent and start it again, in the same window if it is shown.
     Starts it if it is not running.
 
-:Duet send {text}                                                 *:Duet-send*
-:Duet! send {text}
+:[range]Duet send {text}                                          *:Duet-send*
+:[range]Duet! send {text}
     Send {text} to the agent of the current project and submit it, as if
     you had pasted it and pressed <Enter>. {text} is taken as typed,
-    spaces included. With `!`, only paste it, so you can edit it in the
-    agent before you submit it. Starts the agent if it is not running. See
-    |duet-send|.
-
-:Duet prompt [{text}]                                           *:Duet-prompt*
-:Duet! prompt [{text}]
+    spaces included, except that placeholders such as `{file}` or
+    `{selection}` are replaced with editor context (see |duet-context|);
+    [range] is the lines they use. With `!`, only paste it, so you can
+    edit it in the agent before you submit it. Starts the agent if it is
+    not running. See |duet-send|. >vim
+        :'<,'>Duet send Refactor {selection}
+<
+:[range]Duet prompt [{text}]                                    *:Duet-prompt*
+:[range]Duet! prompt [{text}]
     Ask for a prompt with |vim.ui.input()|, prefilled with {text}, and send
-    it like |:Duet-send|. Cancelling, or an empty prompt, sends nothing.
+    it like |:Duet-send|, placeholders included. Cancelling, or an empty
+    prompt, sends nothing.
+
+:[range]Duet ask [{name}]                                          *:Duet-ask*
+:[range]Duet! ask [{name}]
+    Send the prompt template {name} from |duet-config-prompts|, with its
+    placeholders replaced (see |duet-context|). Without {name}, pick one
+    with |vim.ui.select()|. <Tab> completes the names. With `!`, only
+    paste it. >vim
+        :Duet ask explain
+        :'<,'>Duet ask fix
+<
 
 ==============================================================================
 5. HEALTH                                                        *duet-health*
@@ -314,6 +347,45 @@ require("duet").send({text} [, {opts}])                          *duet.send()*
     (for example for empty text, or when the agent cannot start); `on_done`
     is not called then. `on_done` is always called after `send()` has
     returned.
+
+require("duet").ask({name} [, {opts}])                            *duet.ask()*
+    Send prompt template {name}, like |:Duet-ask|, with the context of the
+    current window. Called from visual mode (a mapping), the selection is
+    the range, and visual mode ends. {opts} may set `submit = false` (only
+    paste) and `agent`. Returns `true` once the text is queued, or `nil` and
+    an error message, e.g. for an unknown prompt or when every placeholder
+    is empty.
+
+require("duet").render({template})                             *duet.render()*
+    Replace the placeholders in {template} with the current context, as
+    |:Duet-send| does, without sending anything. Returns the text and a
+    table with `used` (the placeholders found), `empty` (those that had
+    nothing to add, failed ones included) and `errors` (why a placeholder
+    failed, by name).
+
+require("duet.context").register({name}, {fn})     *duet.context.register()*
+    Add a placeholder `{name}` (letters, digits and `_`), or replace one,
+    built-ins included. {fn} gets the context (see |duet-context-ctx|) and
+    returns `{ text = string, data = table, block? = boolean }`, or `nil`
+    when it has nothing to add. `text` is what the agent reads; `data` is
+    the same information as plain values, for tools; `block = true` puts
+    multi-line text on lines of its own. >lua
+        require("duet.context").register("branch", function(ctx)
+          local out = vim.system({ "git", "branch", "--show-current" },
+            { cwd = ctx.cwd, text = true }):wait()
+          local name = vim.trim(out.stdout or "")
+          if name ~= "" then
+            return { text = name, data = { branch = name } }
+          end
+        end)
+<
+    Providers run on the main loop while the command runs, so keep them
+    quick.
+
+require("duet.context").unregister({name})       *duet.context.unregister()*
+    Remove a placeholder. Removing one you registered over a built-in
+    brings the built-in back; removing a built-in itself hides it, and
+    `{name}` is then sent as typed.
 
 require("duet.config").get()                              *duet.config.get()*
     Return the current configuration (treat it as read-only).
@@ -394,7 +466,14 @@ Fields:
                   soon as the agent runs and can't tell when it is asking
                   something, so define it for any agent with a TUI.
 - `format_ref`    (optional) `fun(self, path, range?): string`: how to
-                  refer to a file in a prompt.
+                  refer to a file in a prompt (|duet-context|). `path` is
+                  relative to the project; `range` is `{ first, last }`
+                  (equal for one line). Without it, duet writes `path`,
+                  `path:L10` or `path:L10-L20`. Claude Code's adapter
+                  writes `@path`, `@path (line 10)` or
+                  `@path (lines 10-20)`, so Claude Code reads the file. A
+                  path with spaces is written without the `@`, since an
+                  `@` mention ends at the first space.
 - `health`        (optional) `fun(self)`: extra |vim.health| reports, such
                   as the version.
 
@@ -452,6 +531,12 @@ require("duet.terminal").current()                  *duet.terminal.current()*
     `buf`, `job` (`nil` once exited), `exit_code` (set once exited) and the
     methods `show()`, `hide()`, `focus()`, `toggle()`, `restart()`, `stop()`
     and `is_visible()`.
+
+require("duet.terminal").target([{agent}])            *duet.terminal.target()*
+    Return the session that commands such as |:Duet-send| act on, or `nil`:
+    {agent}'s session for the current project, or without {agent} the
+    session shown in the current tab, else |duet.terminal.current()|. Never
+    starts a session.
 
 require("duet.terminal").get({id})                      *duet.terminal.get()*
     Return the session with id {id} (see `b:duet_session`), or `nil`.
@@ -520,4 +605,88 @@ then send again if the send timed out. If the agent exited while its
 terminal was hidden, duet shows that terminal instead of restarting the
 agent, so its last output isn't lost; send again to restart it.
 
+==============================================================================
+11. CONTEXT AND PROMPTS                                         *duet-context*
+
+Text sent with |:Duet-send|, |:Duet-prompt| and |:Duet-ask| can hold
+placeholders, which are replaced with context from the editor when the
+command runs. |duet.send()| sends text as it is, without replacing anything.
+
+                                                      *duet-context-providers*
+Placeholder       Replaced with ~
+`{file}`          A reference to the current file, e.g. `@src/main.lua`.
+`{this}`          A reference to the range, or to the cursor line, e.g.
+                  `@src/main.lua (lines 10-20)`.
+`{selection}`     The range as a fenced code block in the file's language,
+                  below its `path:L10-L20` location.
+`{diagnostics}`   The current buffer's diagnostics, or those in the range,
+                  one `path:line: [SEVERITY] message` line each. A
+                  diagnostic is in the range if it is on one of its lines
+                  as Neovim counts them (|vim.diagnostic.get()| with
+                  `lnum`).
+`{diagnostics_all}` The diagnostics of every buffer.
+`{quickfix}`      The quickfix list, one `path:line:col: text` line each.
+`{buffers}`       A reference to each listed file buffer, one per line.
+
+References are written the way the agent understands them (see
+`format_ref` in |duet-agents-adapter|); the examples are Claude Code's.
+Paths are relative to the project root (|duet-terminal|), or absolute for
+files outside it. Diagnostics are sorted with errors first; the quickfix
+list and buffers keep their order. Lists hold at most 200 items, followed by
+"… and N more".
+
+A range given to the command (`:'<,'>`, `:3,5`) is whole lines, as for any
+Ex command: Vim can't tell a range made by a selection from one you typed.
+For the exact text of a character-wise or block-wise selection, run the
+command from visual or Select mode with a `<Cmd>` mapping, or call
+|duet.ask()| from a mapping (see |duet-context-mappings|); the mode ends
+afterwards. A block made with `$` takes each line to its end; a line that
+ends before the block is sent empty. Run
+from the agent's terminal, the commands use the code window you were in
+before, without a range.
+
+How placeholders are replaced:
+- Only the names above (and those you add, |duet.context.register()|) are
+  placeholders. Other braces, such as `{foo}` or code, are sent as typed.
+  There is no way to send a placeholder's name itself through these
+  commands; use |duet.send()| for that.
+- A placeholder with nothing to add (`{selection}` without a range, no
+  diagnostics) becomes empty, and a line it leaves blank is dropped. If
+  every placeholder in the text is empty, nothing is sent and duet says
+  why.
+- A placeholder whose provider fails becomes empty too, and duet shows the
+  error: as the reason nothing was sent, or as a warning when the rest of
+  the text is sent.
+- Code blocks and lists go on lines of their own, so
+  `Refactor {selection}` sends "Refactor" with the block below it.
+- Text that replaces a placeholder is not searched for placeholders.
+- Text right after an empty placeholder stays, punctuation included, so
+  put a placeholder that may be empty at the end of a sentence or on a
+  line of its own: `{diagnostics_all}, then {file}` starts with a comma
+  when there are no diagnostics.
+
+                                                       *duet-context-ctx*
+A provider gets a context table: `buf`, `win`, `cursor` (`{ line, col }`,
+line 1-based, col 0-based), `cwd` (the project root), `agent` (the adapter)
+and `range` (`nil`, or `{ start_line, end_line, mode }` with `mode` one of
+`"line"`, `"char"` and `"block"`, plus `start_col` and `end_col` for the
+last two: 1-based byte columns of the selection's ends, on `start_line` and
+`end_line`. For a block they are its two corners, which getregion() turns
+into screen columns, and `to_end` is `true` for a block made with `$`).
+
+                                                       *duet-context-mappings*
+Mappings, for example: >lua
+    -- Visual mode: send the exact selection with a question you type.
+    vim.keymap.set("x", "<leader>as", "<Cmd>Duet prompt {selection}<CR>")
+    -- Explain the selection, or the cursor line in normal mode.
+    vim.keymap.set({ "n", "x" }, "<leader>ae", function()
+      require("duet").ask("explain")
+    end)
+    -- Fix the diagnostics in the selection, or in the buffer.
+    vim.keymap.set({ "n", "x" }, "<leader>af", function()
+      require("duet").ask("fix")
+    end)
+    -- Pick a prompt.
+    vim.keymap.set({ "n", "x" }, "<leader>ap", ":Duet ask<CR>")
+<
  vim:tw=78:ts=8:noet:ft=help:norl:

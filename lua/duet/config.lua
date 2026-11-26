@@ -10,6 +10,7 @@ local M = {}
 ---@field agents table<string, table> per-agent overrides, keyed by agent name
 ---@field terminal table agent terminal options
 ---@field send table options for sending text to the agent
+---@field prompts table<string, string|false> prompt templates for :Duet ask, by name
 ---@field review table review options
 
 ---@type duet.Config
@@ -28,6 +29,11 @@ M.defaults = {
   send = {
     submit_delay_ms = 100,
     ready_timeout_ms = 10000,
+  },
+  prompts = {
+    explain = "Explain {this}",
+    fix = "Fix {diagnostics}",
+    review = "Review {file}",
   },
   review = {},
 }
@@ -136,6 +142,28 @@ M.schema = {
   send = { type = "table" },
   ["send.submit_delay_ms"] = { type = validate_count, desc = "non-negative integer" },
   ["send.ready_timeout_ms"] = { type = validate_count, desc = "non-negative integer" },
+  prompts = {
+    -- `:Duet ask` takes the name as one word.
+    type = function(v)
+      if type(v) ~= "table" then
+        return false
+      end
+      for name in pairs(v) do
+        if type(name) ~= "string" or not name:match("^[%w_-]+$") then
+          return false
+        end
+      end
+      return true
+    end,
+    open = true,
+    desc = "table of prompts by name (letters, digits, _ and -)",
+  },
+  ["prompts.*"] = {
+    type = function(v)
+      return type(v) == "string" or v == false
+    end,
+    desc = "template string or false",
+  },
   review = { type = "table" },
 }
 

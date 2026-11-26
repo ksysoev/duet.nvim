@@ -47,4 +47,29 @@ function M.send(text, opts)
   return require("duet.send").send(text, opts)
 end
 
+---Send prompt template `name` (see |duet-config-prompts|) with the current context: the
+---visual selection when called from visual mode. See |duet.ask()|.
+---@param name string
+---@param opts? duet.AskOpts
+---@return boolean|nil ok
+---@return string|nil err
+function M.ask(name, opts)
+  opts = vim.deepcopy(opts or {})
+  local context = require("duet.context")
+  opts.ctx = opts.ctx or context.capture({ agent = opts.agent })
+  context.leave_visual()
+  return require("duet.context.prompts").ask(name, opts)
+end
+
+---Expand the `{name}` placeholders in `template` with the current context: the visual
+---selection when called from visual mode. Nothing is sent. See |duet.render()|.
+---@param template string
+---@return string text
+---@return duet.RenderInfo info which placeholders were used, and which were empty
+function M.render(template)
+  vim.validate("template", template, "string")
+  local context = require("duet.context")
+  return context.render(template, context.capture())
+end
+
 return M

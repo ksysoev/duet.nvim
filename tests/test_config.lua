@@ -138,6 +138,11 @@ T["validation error"] = MiniTest.new_set({
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
     { "negative submit delay", { send = { submit_delay_ms = -1 } }, "^send.submit_delay_ms: expected" },
     { "fractional ready timeout", { send = { ready_timeout_ms = 1.5 } }, "^send.ready_timeout_ms: expected" },
+    { "prompts as a string", { prompts = "x" }, "^prompts: expected table of prompts" },
+    { "prompt name with a space", { prompts = { ["write tests"] = "x" } }, "^prompts: expected table of prompts" },
+    { "prompt name with a dot", { prompts = { ["a.b"] = "x" } }, "^prompts: expected table of prompts" },
+    { "prompt as a number", { prompts = { fix = 1 } }, "^prompts.fix: expected" },
+    { "prompt as true", { prompts = { fix = true } }, "^prompts.fix: expected" },
     {
       "key action under a dotted lhs",
       { terminal = { keys = { ["<M-.>"] = "hid" } } },
@@ -168,6 +173,8 @@ T["unknown keys"] = MiniTest.new_set({
     { "agent env keys are not options", { agents = { x = { env = { FOO = "1" }, args = {} } } }, nil },
     { "terminal keys are not options", { terminal = { keys = { ["<C-q>"] = false, ["<C-x>"] = "hide" } } }, nil },
     { "dotted terminal keys are not options", { terminal = { keys = { ["<M-.>"] = "hide" } } }, nil },
+    { "prompt names are not options", { prompts = { mine = "Do {file}", explain = false } }, nil },
+    { "prompt names with - and _", { prompts = { ["write-tests"] = "x", fix_all = "y" } }, nil },
   },
 })
 
@@ -178,6 +185,14 @@ T["unknown keys"]["%s"] = function(_, opts, expected)
   else
     eq(capture.messages, { { msg = "[duet] unknown option(s): " .. expected, level = vim.log.levels.WARN } })
   end
+end
+
+T["prompts merge with the defaults"] = function()
+  eq(config().setup({ prompts = { tests = "Test {file}", fix = false } }), true)
+  eq(
+    config().get().prompts,
+    { explain = "Explain {this}", fix = false, review = "Review {file}", tests = "Test {file}" }
+  )
 end
 
 T["schema"] = MiniTest.new_set()
