@@ -172,7 +172,7 @@ end
 
 T["expand()"]["hints at a missing selection"] = function()
   local _, err = require("duet.context").expand("Refactor {selection}", { buf = 0 })
-  eq(err, "nothing to send: {selection} is empty (no range or selection given; duet.send() sends text as typed)")
+  eq(err, "nothing to send: {selection} is empty (no range or selection given: use :'<,'> or a visual-mode mapping)")
 end
 
 T["register()"] = MiniTest.new_set()

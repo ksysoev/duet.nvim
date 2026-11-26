@@ -509,7 +509,7 @@ function M.expand(text, ctx)
     local verb = #empty == 1 and "is" or "are"
     local hint = ""
     if vim.tbl_contains(info.empty, "selection") and not info.errors.selection and not ctx.range then
-      hint = " (no range or selection given; duet.send() sends text as typed)"
+      hint = " (no range or selection given: use :'<,'> or a visual-mode mapping)"
     end
     reasons[#reasons + 1] = ("%s %s empty%s"):format(table.concat(empty, ", "), verb, hint)
   end

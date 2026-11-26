@@ -621,7 +621,7 @@ C["send refuses when every placeholder is empty"] = function()
   child.cmd("Duet send Refactor {selection}")
   eq(
     child.lua_get("_G.notes[1].msg"),
-    "[duet] send: nothing to send: {selection} is empty (no range or selection given; duet.send() sends text as typed)"
+    "[duet] send: nothing to send: {selection} is empty (no range or selection given: use :'<,'> or a visual-mode mapping)"
   )
   eq(child.lua_get("#require('duet.terminal').list()"), 0)
 end
