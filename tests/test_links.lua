@@ -65,6 +65,14 @@ T["parse()"] = MiniTest.new_set({
     { "time and plain words", "at 10:30 and/or not", { link("and/or", 10, 15) } },
     { "number", "42", {} },
     { "empty", "", {} },
+    { "rg -n match", "lua/duet/init.lua:12:local M = {}", { link("lua/duet/init.lua", 1, 20, { line = 12 }) } },
+    { "rg --column match", "a.lua:12:5:local x", { link("a.lua", 1, 10, { line = 12, col = 5 }) } },
+    { "grep match with a URL", "a.lua:3:see http://x", { link("a.lua", 1, 7, { line = 3 }) } },
+    { "a clock time", "10:30:00", {} },
+    { "URL with a port", "http://host:8080/x", {} },
+    { "reversed phrase range", "@a.lua (lines 20-10)", { link("a.lua", 1, 20, { line = 10, end_line = 20 }) } },
+    { "file URI with an encoded #", "file:///r/a%23L2", { link("/r/a#L2", 1, 16) } },
+    { "file URI with an encoded # and a line", "file:///r/a%23b.lua#L3", { link("/r/a#b.lua", 1, 22, { line = 3 }) } },
   },
 })
 
@@ -87,6 +95,23 @@ T["parse_ref()"] = MiniTest.new_set({
 
 T["parse_ref()"]["parses %s"] = function(_, token, marked, want)
   eq(require("duet.links").parse_ref(token, marked), want)
+end
+
+-- cell_to_byte() -----------------------------------------------------------------
+
+T["cell_to_byte()"] = MiniTest.new_set({
+  parametrize = {
+    { "ASCII", "ab cd", 3, 3 },
+    { "cell 0", "⏺ x", 0, 0 },
+    { "after a one-cell symbol", "⏺ link", 2, 4 },
+    { "after wide characters", "漢字 link", 5, 7 },
+    { "past the end", "ab", 10, 2 },
+    { "empty line", "", 4, 0 },
+  },
+})
+
+T["cell_to_byte()"]["converts %s"] = function(_, text, cell, want)
+  eq(require("duet.links").cell_to_byte(text, cell), want)
 end
 
 -- resolve() ----------------------------------------------------------------------
@@ -333,16 +358,28 @@ T["terminal"]["follows OSC 8 hyperlinks"] = MiniTest.new_set({
   parametrize = { { "file URI" }, { "relative path" } },
 })
 
-T["terminal"]["follows OSC 8 hyperlinks"]["with a %s"] = function(kind)
-  local target = kind == "file URI" and ("file://" .. root .. "/lua/duet/init.lua#L5") or "lua/duet/init.lua#L5"
-  agent(("printf '\\033]8;;%s\\033\\\\Open me\\033]8;;\\033\\\\ now\\n'"):format(target))
-  child.lua("cursor_on('Open me')")
+-- Skip the test when this Neovim does not report OSC 8 with TermRequest: no span appears.
+local function require_osc8()
   local seen = child.lua_get([[wait(function()
     return #vim.api.nvim_buf_get_extmarks(s.buf, vim.api.nvim_create_namespace("duet.links.osc8"), 0, -1, {}) > 0
   end, 1000)]])
   if not seen then
     MiniTest.skip("TermRequest does not report OSC 8 on Neovim " .. tostring(child.lua_get("vim.version()")))
   end
+  child.lua("vim.wait(100)") -- let the spans settle
+end
+
+---printf commands that print an OSC 8 hyperlink to `target` with `text`, between
+---`before` and `after`.
+local function osc8(target, text, before, after)
+  return ("printf '%s\\033]8;;%s\\033\\\\%s\\033]8;;\\033\\\\%s\\n'"):format(before or "", target, text, after or "")
+end
+
+T["terminal"]["follows OSC 8 hyperlinks"]["with a %s"] = function(kind)
+  local target = kind == "file URI" and ("file://" .. root .. "/lua/duet/init.lua#L5") or "lua/duet/init.lua#L5"
+  agent(osc8(target, "Open me", "", " now"))
+  child.lua("cursor_on('Open me')")
+  require_osc8()
   child.type_keys("w", "gf")
   local at = child.lua_get("where()")
   eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
@@ -362,6 +399,75 @@ T["terminal"]["ignores an OSC 8 span the program wrote over"] = function()
   child.lua("cursor_on('b.lua')")
   child.type_keys("gf")
   eq(rel(child.lua_get("where().name")), "b.lua")
+end
+
+T["terminal"]["places OSC 8 hyperlinks after multibyte text"] = MiniTest.new_set({
+  parametrize = { { "⏺ " }, { "漢字 " } },
+})
+
+T["terminal"]["places OSC 8 hyperlinks after multibyte text"]["after %s"] = function(prefix)
+  agent(osc8("file://" .. root .. "/lua/duet/init.lua#L5", "link", prefix, " end"))
+  -- The last letter: a span placed by screen cells as bytes ends before it.
+  child.lua("cursor_on('k end')")
+  require_osc8()
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
+  -- The space before the link is not part of it; such a span starts before it.
+  child.lua("vim.cmd.wincmd('p'); cursor_on(' link')")
+  child.type_keys("gf")
+  eq(child.lua_get("where().terminal"), true)
+end
+
+T["terminal"]["keeps OSC 8 hyperlinks on their line while the scrollback is trimmed"] = function()
+  -- The agent waits so the test can shrink the scrollback first; then output arrives in
+  -- pieces, so lines are dropped from the top while the link's text is not in yet.
+  local print_link = osc8("file://" .. root .. "/lua/duet/init.lua#L5", "LINK")
+  agent(
+    "sleep 0.3; for i in $(seq 1 60); do echo filler$i; done; "
+      .. print_link
+      .. "; for i in 1 2 3 4 5 6 7 8; do sleep 0.01; echo after$i; done"
+  )
+  child.lua("vim.bo[s.buf].scrollback = 3")
+  child.lua("cursor_on('after8'); cursor_on('LINK')")
+  require_osc8()
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
+end
+
+T["terminal"]["keeps at most 500 OSC 8 hyperlinks"] = function()
+  agent([[for i in $(seq 1 600); do printf '\033]8;;file:///x%d\033\\L\033]8;;\033\\\n' $i; done]])
+  child.lua("cursor_on('L')")
+  require_osc8()
+  local count = child.lua_get([[(function()
+    wait(function() return vim.api.nvim_buf_line_count(s.buf) >= 600 end)
+    vim.wait(300)
+    return #vim.api.nvim_buf_get_extmarks(s.buf, vim.api.nvim_create_namespace("duet.links.osc8"), 0, -1, {})
+  end)()]])
+  eq(count, 500)
+end
+
+T["terminal"]["a file that fails to open leaves the layout as it was"] = MiniTest.new_set({
+  parametrize = { { "no code window" }, { "float" } },
+})
+
+T["terminal"]["a file that fails to open leaves the layout as it was"]["with %s"] = function(kind)
+  local opts = kind == "float" and { terminal = { layout = "float" } } or {}
+  agent("printf 'a.lua:1\\n'", opts)
+  child.lua("cursor_on('a.lua')")
+  if kind == "no code window" then
+    child.lua("vim.cmd('only')")
+  end
+  child.lua([[vim.api.nvim_create_autocmd("BufReadCmd", {
+    pattern = "*/a.lua",
+    callback = function() error("cannot read") end,
+  })]])
+  local before = child.lua_get("#vim.api.nvim_tabpage_list_wins(0)")
+  child.type_keys("gf")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+  eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
 end
 
 -- open() -------------------------------------------------------------------------

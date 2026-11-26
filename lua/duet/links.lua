@@ -22,9 +22,24 @@ local hl_ns = vim.api.nvim_create_namespace("duet.links")
 local flash_ns = vim.api.nvim_create_namespace("duet.links.flash")
 local osc8_ns = vim.api.nvim_create_namespace("duet.links.osc8")
 
----OSC 8 spans by buffer, then by extmark id.
----@type table<integer, table<integer, { uri: string, text: string }>>
+---@class duet.links.Span an OSC 8 hyperlink the program printed
+---@field uri string its target
+---@field s_cell integer 0-based screen cell where it starts
+---@field e_cell integer screen cell where it ends (exclusive)
+---@field text? string its text, once it is in the buffer; the span counts while it stays
+
+---@class duet.links.Spans
+---@field by_id table<integer, duet.links.Span> by extmark id
+---@field order integer[] extmark ids, oldest first; may hold ids already dropped
+---@field count integer spans in `by_id`
+
+---OSC 8 spans by buffer.
+---@type table<integer, duet.links.Spans>
 local osc8_spans = {}
+local drop_span
+
+-- At most this many OSC 8 spans are kept per terminal: the oldest go first.
+local MAX_OSC8_SPANS = 500
 
 -- Parsing --------------------------------------------------------------------
 
@@ -67,28 +82,43 @@ local SUFFIXES = {
   end,
 }
 
+-- Locations followed by more text, as grep and ripgrep print matches: `a.lua:12:text`,
+-- `a.lua:12:5:text`. Tried when no suffix matches the whole token.
+local PREFIXES = { "^(.-):(%d+):(%d+):()", "^(.-):(%d+):()" }
+
 ---Split a reference like `a.lua:10-20` into its path and location.
 ---@param token string
 ---@return string path
 ---@return integer|nil line
 ---@return integer|nil end_line
 ---@return integer|nil col
+---@return integer used bytes of `token` the reference takes, up to its location
 local function split_location(token)
   for _, try in ipairs(SUFFIXES) do
     local p, l, e, c = try(token)
     if p and p ~= "" then
-      return p, tonumber(l), tonumber(e), tonumber(c)
+      return p, tonumber(l), tonumber(e), tonumber(c), #token
     end
   end
-  return token, nil, nil, nil
+  for _, pattern in ipairs(PREFIXES) do
+    local p, l, c, after = token:match(pattern)
+    if after == nil then
+      c, after = nil, c
+    end
+    if p and p ~= "" then
+      -- The reference ends before the colon that starts the text.
+      return p, tonumber(l), nil, tonumber(c), after - 2
+    end
+  end
+  return token, nil, nil, nil, #token
 end
 
----A `file://` URI as a path, or nil if `token` is not one.
+---The path of a `file://` URI, still percent-encoded, or nil if `token` is not one.
+---Decode it after splitting off the location: a `%23` is part of the name, not a `#`.
 ---@param token string
 ---@return string|nil
 local function file_uri_path(token)
-  local rest = token:match("^file://[^/]*(/.*)$")
-  return rest and vim.uri_decode(rest) or nil
+  return token:match("^file://[^/]*(/.*)$")
 end
 
 ---Whether `path` looks enough like a file to be worth resolving.
@@ -111,15 +141,21 @@ end
 ---@param token string
 ---@param marked? boolean written with `@` or in backticks: bare names count
 ---@return { path: string, line?: integer, end_line?: integer, col?: integer }|nil
+---@return integer|nil used bytes of `token` the reference takes: less than all of it for
+---grep output such as `a.lua:12:text`
 function M.parse_ref(token, marked)
+  local length = #token
   local uri_path = file_uri_path(token)
   if uri_path then
     token = uri_path
     marked = true
-  elseif token:find("://", 1, true) then
+  end
+  local path, line, end_line, col, used = split_location(token)
+  if uri_path then
+    path, used = vim.uri_decode(path), length
+  elseif path:find("://", 1, true) then
     return nil -- a URL
   end
-  local path, line, end_line, col = split_location(token)
   if not plausible(path, marked == true, line ~= nil) then
     return nil
   end
@@ -129,7 +165,7 @@ function M.parse_ref(token, marked)
   if end_line == line then
     end_line = nil
   end
-  return { path = path, line = line, end_line = end_line, col = col }
+  return { path = path, line = line, end_line = end_line, col = col }, used
 end
 
 ---Find the file references in a line of text, e.g. `lua/duet/init.lua:10`,
@@ -153,7 +189,13 @@ function M.parse(line)
       local ts, te = s + #lead, e - #trail
       local at = lead:find("@", 1, true) ~= nil
       local backticked = line:sub(ts - 1, ts - 1) == "`" and line:sub(te + 1, te + 1) == "`"
-      local ref = trimmed ~= "" and M.parse_ref(trimmed, at or backticked) or nil
+      local ref, used
+      if trimmed ~= "" then
+        ref, used = M.parse_ref(trimmed, at or backticked)
+      end
+      if ref and used and used < #trimmed then
+        te = ts + used - 1 -- `a.lua:12:text`: the text after the location is not part of it
+      end
       if ref then
         -- A location written after the path: `@a.lua (lines 3-5)`, `"a.py", line 10`.
         local rest = line:sub(te + 1)
@@ -164,6 +206,9 @@ function M.parse(line)
         end
         if p_start and not ref.line then
           l1, l2, phrase_end = tonumber(a), tonumber(b), te + p_end
+          if l2 and l2 < l1 then
+            l1, l2 = l2, l1
+          end
           ref.line = l1
           if l2 and l2 > l1 then
             ref.end_line = l2
@@ -269,6 +314,86 @@ local function slice(buf, row, s, e)
   return ok and text[1] or ""
 end
 
+---The byte offset in `text` of a 0-based screen cell, as a terminal counts them: a wide
+---character takes two cells. Past the end of `text`, its length.
+---@param text string
+---@param cell integer
+---@return integer
+function M.cell_to_byte(text, cell)
+  local byte, cells = 0, 0
+  while cells < cell and byte < #text do
+    local len = vim.str_utf_end(text, byte + 1) + 1
+    cells = cells + vim.fn.strdisplaywidth(text:sub(byte + 1, byte + len))
+    byte = byte + len
+  end
+  return byte
+end
+
+---Forget an OSC 8 span and its extmark.
+---@param buf integer
+---@param id integer
+drop_span = function(buf, id)
+  local store = osc8_spans[buf]
+  if store and store.by_id[id] then
+    store.by_id[id] = nil
+    store.count = store.count - 1
+  end
+  pcall(vim.api.nvim_buf_del_extmark, buf, osc8_ns, id)
+end
+
+---Record a span under its extmark, dropping the oldest ones past MAX_OSC8_SPANS.
+---@param buf integer
+---@param id integer
+---@param span duet.links.Span
+local function add_span(buf, id, span)
+  local store = osc8_spans[buf]
+  store.by_id[id] = span
+  store.count = store.count + 1
+  store.order[#store.order + 1] = id
+  if #store.order > 2 * MAX_OSC8_SPANS then
+    store.order = vim.tbl_filter(function(old)
+      return store.by_id[old] ~= nil
+    end, store.order)
+  end
+  while store.count > MAX_OSC8_SPANS do
+    drop_span(buf, table.remove(store.order, 1))
+  end
+end
+
+---Read a span's text once the terminal has written it. The extmark has stayed on the
+---span's line, wherever trimming the scrollback moved it; it now covers the text, whose
+---byte columns follow from the screen cells.
+---@param buf integer
+---@param id integer
+local function settle_span(buf, id)
+  local store = osc8_spans[buf]
+  local span = store and store.by_id[id]
+  if not span or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local pos = vim.api.nvim_buf_get_extmark_by_id(buf, osc8_ns, id, {})
+  if #pos == 0 then
+    drop_span(buf, id)
+    return
+  end
+  local row = pos[1]
+  local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+  local s, e = M.cell_to_byte(line, span.s_cell), M.cell_to_byte(line, span.e_cell)
+  if e <= s then
+    drop_span(buf, id)
+    return
+  end
+  -- A TUI prints the same link again on every redraw: keep one span per position.
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, osc8_ns, { row, s }, { row, s }, {})) do
+    local other = store.by_id[mark[1]]
+    if mark[1] ~= id and other and other.text then
+      drop_span(buf, mark[1])
+    end
+  end
+  vim.api.nvim_buf_set_extmark(buf, osc8_ns, row, s, { id = id, end_col = e })
+  span.text = line:sub(s + 1, e)
+end
+
 ---The OSC 8 hyperlink at a (1-based row, 1-based byte col) position, as a link.
 ---@param buf integer
 ---@param row integer
@@ -283,13 +408,21 @@ local function osc8_at(buf, row, col, cwd)
     { row - 1, -1 },
     { details = true, overlap = true }
   )
-  local spans = osc8_spans[buf] or {}
+  local store = osc8_spans[buf]
+  if not store then
+    return nil
+  end
   for _, mark in ipairs(marks) do
     local id, r, s, details = mark[1], mark[2], mark[3], mark[4]
-    local span = spans[id]
+    local span = store.by_id[id]
     local e = details.end_col
+    local inside = span and span.text and e and s < col and col <= e
     -- Output rewritten over the span makes it stale: its text must still be there.
-    if span and e and s < col and col <= e and slice(buf, r, s, e) == span.text then
+    if inside and slice(buf, r, s, e) ~= span.text then
+      drop_span(buf, id)
+      inside = false
+    end
+    if inside then
       local ref = M.parse_ref(span.uri, true)
       if ref then
         local abs = M.resolve(ref.path, cwd)
@@ -383,26 +516,51 @@ end
 -- file goes on the other side.
 local SPLIT_FROM = { right = "leftabove vnew", left = "rightbelow vnew", bottom = "leftabove new" }
 
+---@class duet.links.Undo what target_window() changed, for when the file does not open
+---@field win integer the window that was current
+---@field created? integer the split it opened
+---@field hidden? duet.Session the floating terminal it hid
+
 ---The window to open a file in: a code window in the tab, else a new split. A floating
 ---duet terminal in front is hidden first, so the file is not opened under it.
 ---@return integer win
+---@return duet.links.Undo undo
 local function target_window()
   local util = require("duet.util")
   local cur = vim.api.nvim_get_current_win()
+  local undo = { win = cur }
   local id = vim.b.duet_session
   if id and vim.api.nvim_win_get_config(cur).relative ~= "" then
     local session = require("duet.terminal").get(id)
     if session then
       session:hide()
+      undo.hidden = session
       cur = vim.api.nvim_get_current_win()
     end
   end
   local win, found = util.code_window()
   if found then
-    return win
+    return win, undo
   end
   vim.cmd(SPLIT_FROM[vim.w[cur].duet_layout] or "leftabove vnew")
-  return vim.api.nvim_get_current_win()
+  undo.created = vim.api.nvim_get_current_win()
+  return undo.created, undo
+end
+
+---Put the layout back as it was before target_window().
+---@param undo duet.links.Undo
+local function restore_layout(undo)
+  if undo.created and vim.api.nvim_win_is_valid(undo.created) then
+    pcall(vim.api.nvim_win_close, undo.created, true)
+  end
+  if undo.hidden then
+    local win = undo.hidden:show()
+    if win then
+      vim.api.nvim_set_current_win(win)
+    end
+  elseif vim.api.nvim_win_is_valid(undo.win) then
+    vim.api.nvim_set_current_win(undo.win)
+  end
 end
 
 ---@param value integer
@@ -429,13 +587,14 @@ function M.open(link, opts)
     end
   end
   ensure_highlights()
-  local win = target_window()
+  local win, undo = target_window()
   vim.api.nvim_set_current_win(win)
   local buf = vim.api.nvim_win_get_buf(win)
   if vim.fs.normalize(vim.api.nvim_buf_get_name(buf)) ~= abs then
     vim.cmd("normal! m'")
     local ok, edit_err = pcall(vim.cmd.edit, vim.fn.fnameescape(abs))
     if not ok then
+      restore_layout(undo)
       return nil, ("links: cannot open '%s': %s"):format(link.path, edit_err)
     end
     buf = vim.api.nvim_win_get_buf(win)
@@ -589,17 +748,20 @@ end
 -- OSC 8 ----------------------------------------------------------------------
 
 -- How long after an OSC 8 link ends its text is read back. Neovim writes terminal output
--- to the buffer on a short timer, after the TermRequest that announced the link.
+-- to the buffer on a short timer, after the TermRequest that announced the link: then the
+-- line is there but still empty.
 local OSC8_SETTLE_MS = 50
 
 ---Record OSC 8 hyperlinks the program in terminal `buf` prints, so the link under the
----cursor can use their target. A span remembers its text; once the program writes over
----it, the span no longer counts.
+---cursor can use their target. TermRequest gives screen cells on a row whose text is not
+---in the buffer yet, so an extmark marks the row at once (it moves with the line when the
+---scrollback is trimmed), and the text and its byte columns are read shortly after. A span
+---remembers its text; once the program writes over it, the span no longer counts.
 ---@param buf integer
 function M.attach_osc8(buf)
   local open
   local group = vim.api.nvim_create_augroup("duet.links.osc8." .. buf, { clear = true })
-  osc8_spans[buf] = {}
+  osc8_spans[buf] = { by_id = {}, order = {}, count = 0 }
   vim.api.nvim_create_autocmd("BufUnload", {
     group = group,
     buffer = buf,
@@ -630,26 +792,13 @@ function M.attach_osc8(buf)
       if not (start and cursor and start.row >= 1 and cursor[1] == start.row and cursor[2] > start.col) then
         return
       end
-      local row, s, e = start.row - 1, start.col, cursor[2]
+      local ok, id = pcall(vim.api.nvim_buf_set_extmark, buf, osc8_ns, start.row - 1, 0, {})
+      if not ok then
+        return
+      end
+      add_span(buf, id, { uri = start.uri, s_cell = start.col, e_cell = cursor[2] })
       vim.defer_fn(function()
-        local spans = osc8_spans[buf]
-        if not spans or not vim.api.nvim_buf_is_valid(buf) then
-          return
-        end
-        local text = slice(buf, row, s, e)
-        if text == "" then
-          return
-        end
-        -- A TUI prints the same link again on every redraw: keep one span per position.
-        local old = vim.api.nvim_buf_get_extmarks(buf, osc8_ns, { row, s }, { row, s }, {})
-        for _, mark in ipairs(old) do
-          vim.api.nvim_buf_del_extmark(buf, osc8_ns, mark[1])
-          spans[mark[1]] = nil
-        end
-        local ok, id = pcall(vim.api.nvim_buf_set_extmark, buf, osc8_ns, row, s, { end_col = e })
-        if ok then
-          spans[id] = { uri = start.uri, text = text }
-        end
+        settle_span(buf, id)
       end, OSC8_SETTLE_MS)
     end,
   })

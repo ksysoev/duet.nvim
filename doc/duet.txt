@@ -739,6 +739,7 @@ References duet recognizes ~
     `a.lua#L10`  `a.lua#L10-L20`  `a.lua#L10C5`
     `@lua/duet/init.lua`  `@a.lua (lines 10-20)`  as duet sends them
     `` `Makefile` ``                  any name in backticks
+    `a.lua:12:text`  `a.lua:12:5:text`  grep and ripgrep matches
     `File "a.py", line 10`          Python tracebacks
     `file:///abs/a.lua#L3`          file URIs
 Paths may be relative, absolute or start with `~`. They can be surrounded
