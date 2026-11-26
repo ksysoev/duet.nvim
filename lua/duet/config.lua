@@ -142,7 +142,22 @@ M.schema = {
   send = { type = "table" },
   ["send.submit_delay_ms"] = { type = validate_count, desc = "non-negative integer" },
   ["send.ready_timeout_ms"] = { type = validate_count, desc = "non-negative integer" },
-  prompts = { type = "table", open = true },
+  prompts = {
+    -- `:Duet ask` takes the name as one word.
+    type = function(v)
+      if type(v) ~= "table" then
+        return false
+      end
+      for name in pairs(v) do
+        if type(name) ~= "string" or not name:match("^[%w_-]+$") then
+          return false
+        end
+      end
+      return true
+    end,
+    open = true,
+    desc = "table of prompts by name (letters, digits, _ and -)",
+  },
   ["prompts.*"] = {
     type = function(v)
       return type(v) == "string" or v == false

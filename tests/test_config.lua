@@ -138,7 +138,9 @@ T["validation error"] = MiniTest.new_set({
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
     { "negative submit delay", { send = { submit_delay_ms = -1 } }, "^send.submit_delay_ms: expected" },
     { "fractional ready timeout", { send = { ready_timeout_ms = 1.5 } }, "^send.ready_timeout_ms: expected" },
-    { "prompts as a list", { prompts = "x" }, "^prompts: expected table" },
+    { "prompts as a string", { prompts = "x" }, "^prompts: expected table of prompts" },
+    { "prompt name with a space", { prompts = { ["write tests"] = "x" } }, "^prompts: expected table of prompts" },
+    { "prompt name with a dot", { prompts = { ["a.b"] = "x" } }, "^prompts: expected table of prompts" },
     { "prompt as a number", { prompts = { fix = 1 } }, "^prompts.fix: expected" },
     { "prompt as true", { prompts = { fix = true } }, "^prompts.fix: expected" },
     {
@@ -172,6 +174,7 @@ T["unknown keys"] = MiniTest.new_set({
     { "terminal keys are not options", { terminal = { keys = { ["<C-q>"] = false, ["<C-x>"] = "hide" } } }, nil },
     { "dotted terminal keys are not options", { terminal = { keys = { ["<M-.>"] = "hide" } } }, nil },
     { "prompt names are not options", { prompts = { mine = "Do {file}", explain = false } }, nil },
+    { "prompt names with - and _", { prompts = { ["write-tests"] = "x", fix_all = "y" } }, nil },
   },
 })
 

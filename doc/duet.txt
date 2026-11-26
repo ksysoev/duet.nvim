@@ -222,7 +222,8 @@ send ~
                                                          *duet-config-prompts*
 prompts ~
     `table<string, string|false>`
-    Prompt templates for |:Duet-ask| and |duet.ask()|, by name. A template
+    Prompt templates for |:Duet-ask| and |duet.ask()|, by name: letters,
+    digits, `_` and `-`, since `:Duet ask` takes it as one word. A template
     is text with placeholders such as `{this}` (see |duet-context|). Your
     prompts are added to the defaults; set a default to `false` to remove
     it: >lua
