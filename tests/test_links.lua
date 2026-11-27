@@ -655,7 +655,7 @@ end
 ---@param file string
 ---@param pinned? boolean
 ---@return integer
-local function code(file, pinned)
+local function show_code(file, pinned)
   child.cmd("edit " .. file)
   child.wo.winfixbuf = pinned == true
   return child.lua_get("vim.api.nvim_get_current_win()")
@@ -664,7 +664,7 @@ end
 T["terminal"]["a code window that sets 'winfixbuf'"] = MiniTest.new_set()
 
 T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a split"] = function()
-  local pinned = code("b.lua", true)
+  local pinned = show_code("b.lua", true)
   agent("printf 'a.lua:1\\n'")
   child.lua("cursor_on('a.lua')")
   child.type_keys("gf")
@@ -678,7 +678,7 @@ T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a split"] =
 end
 
 T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a start screen"] = function()
-  local pinned = code("b.lua", true)
+  local pinned = show_code("b.lua", true)
   local dashboard = screen("alpha", "botright new")
   agent("printf 'a.lua:1\\n'")
   follow_from(pinned)
@@ -688,9 +688,9 @@ T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a start scr
 end
 
 T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for another code window"] = function()
-  local free = code("c.lua")
+  local free = show_code("c.lua")
   child.cmd("split")
-  local pinned = code("b.lua", true)
+  local pinned = show_code("b.lua", true)
   agent("printf 'a.lua:1\\n'")
   -- The pinned window is the previous one, and comes first in the tab.
   follow_from(pinned)
@@ -700,7 +700,7 @@ T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for another cod
 end
 
 T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the file"] = function()
-  local pinned = code("lua/duet/init.lua", true)
+  local pinned = show_code("lua/duet/init.lua", true)
   agent("printf 'lua/duet/init.lua:7\\n'")
   child.lua("cursor_on('init.lua')")
   child.type_keys("gf")

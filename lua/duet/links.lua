@@ -860,8 +860,8 @@ local function target_window(abs)
       cur = vim.api.nvim_get_current_win()
     end
   end
-  local win, found = util.code_window(function(id)
-    return not vim.wo[id].winfixbuf or shows(id, abs)
+  local win, found = util.code_window(function(w)
+    return not vim.wo[w].winfixbuf or shows(w, abs)
   end)
   if found then
     return win, undo
