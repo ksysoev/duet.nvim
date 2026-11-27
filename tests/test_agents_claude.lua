@@ -312,6 +312,28 @@ local ready_cases = {
     ready = false,
   },
   { name = "prompt marker without a rule", lines = { "some output", "❯ text" }, ready = false },
+  -- Captured from Claude Code 2.1.330 in an 80-column Neovim terminal, after `/copy` was
+  -- sent: the live input box has a no-break space after its `❯`.
+  {
+    name = "the slash-command menu in a Neovim terminal",
+    lines = {
+      " ▐▛███▛█   Claude Code v2.1.330",
+      "▝▜██████▀  Opus 5.5 · Claude Pro",
+      " ▝▝   ▝▝   ~/Documents/Dev/duet.nvim",
+      "",
+      "",
+      "❯ /clear" .. string.rep(" ", 72),
+      "",
+      string.rep("─", 80),
+      "❯\194\160/copy",
+      string.rep("─", 80),
+      "  ❯ /copy                       Copy the last response to clipboard (/copy 2",
+      "                                for the one before)",
+      "    /fork                       Copy this conversation into a new background",
+      "                                session and keep working here",
+    },
+    ready = true,
+  },
   -- Captured from Claude Code 2.1.330 in a 100-column terminal, after pasting `/clear`.
   {
     name = "the slash-command menu below the input box",

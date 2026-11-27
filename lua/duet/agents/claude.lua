@@ -199,6 +199,15 @@ local function is_menu_row(line)
   return line:match("^%s*$") ~= nil or line:match("^    ") ~= nil
 end
 
+---Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude
+---Code puts a no-break space after the `❯` of the live input box (a plain space in the
+---transcript and the menu).
+---@param line string
+---@return boolean
+local function holds_command(line)
+  return vim.startswith(line, "❯ /") or vim.startswith(line, "❯" .. NBSP .. "/")
+end
+
 ---If line `i` is the selected entry of the slash-command menu, the prompt line of the
 ---input box the menu belongs to. The entry must hang below the box's closing rule (other
 ---entries or a notice may come between), the box must hold a slash command, and only
@@ -220,7 +229,7 @@ local function menu_prompt(lines, i)
       return nil
     elseif is_rule(lines[j]) then
       local prompt = box_prompt(lines, j)
-      return prompt and vim.startswith(lines[prompt], "❯ /") and prompt or nil
+      return prompt and holds_command(lines[prompt]) and prompt or nil
     end
   end
   return nil

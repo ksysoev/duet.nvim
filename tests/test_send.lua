@@ -367,7 +367,7 @@ S["submits a slash command while Claude Code's command menu is open"] = function
   -- it. The test checks that Enter went through on the menu's screen.
   local rule = string.rep("─", 60)
   local box = ("printf '%%s\\r\\n' '%s' '❯ ' '%s'"):format(rule, rule)
-  local menu = ("printf '\\033[2J\\033[H'; printf '%%s\\r\\n' '%s' '❯ /clear' '%s' '  ❯ /clear    Start a new session'"):format(
+  local menu = ("printf '\\033[2J\\033[H'; printf '%%s\\r\\n' '%s' '❯\194\160/clear' '%s' '  ❯ /clear    Start a new session'"):format(
     rule,
     rule
   )
