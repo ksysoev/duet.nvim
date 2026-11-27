@@ -875,9 +875,17 @@ CTRL-click on text in the terminal that is not a link, or names a file that
 does not exist, does nothing: until the button is let go, duet also keeps
 the click's drag and release (`<C-LeftDrag>`, `<C-LeftRelease>`, and
 `<LeftDrag>`, `<LeftRelease>` for when CTRL is let go first), except keys you
-map in |duet-config-terminal-keys|. Anywhere else, such as another window
-or a status line, the click gets Neovim's built-in action, not a mapping of
-your own for the same key. Only a click in a window
+map in |duet-config-terminal-keys|. A double or triple click on the
+terminal's text acts once: duet keeps its next presses (`<2-C-LeftMouse>`,
+…) with their drags and releases, so they don't reach the agent, unless
+you map them.
+
+Anywhere else, such as another window or a status line, the click does what
+it does without duet: your own global mapping of the key (for example
+`<C-LeftMouse>` for LSP go-to-definition), else Neovim's built-in action, with
+the count typed before it in normal mode. As Neovim does, in
+|Terminal-mode| with no Terminal-mode mapping of the key, the click leaves
+Terminal mode and gets your normal mode mapping. Only a click in a window
 showing the agent's terminal while that terminal is the current buffer is
 seen: from another window, it is Neovim's own CTRL-click.
 
@@ -904,8 +912,6 @@ Known quirks:
   uses the mouse, so `<S-LeftMouse>` rarely reaches Neovim.
 - In tmux, clicks reach Neovim only with `set -g mouse on`; tmux passes the
   modifiers on.
-- A double-click is `<2-C-LeftMouse>`, a different key: map it too if you
-  double-click by habit.
 
 OSC 8 hyperlinks ~
 Programs can print a link whose target differs from its text, as OSC 8
