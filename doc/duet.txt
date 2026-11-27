@@ -545,13 +545,15 @@ Fields:
 - `read_input`    (optional) `fun(self, lines): string|nil`: the agent's
                   input box as shown in its terminal (given as its last
                   lines), or `nil` if no input box is on screen. It can be
-                  the box's raw lines, placeholder included: duet only
-                  compares it from one moment to the next, and looks in it
-                  for the last word of a short one-line text. With it, a
-                  send presses <Enter> once the paste shows in the box, and
-                  the next send waits until <Enter> has been taken in (the
-                  box changed and no longer shows the text), so two sends
-                  can't merge into one message (see |duet-send|).
+                  the box's raw lines, placeholder included: duet compares
+                  it from one moment to the next, and checks whether it
+                  ends with a one-line text of up to 200 bytes (whitespace
+                  and no-break spaces ignored, so wrapped rows are fine).
+                  With it, a send presses <Enter> once the paste shows in
+                  the box, and the next send waits until <Enter> has been
+                  taken in (the box changed and no longer shows the text),
+                  so two sends can't merge into one message (see
+                  |duet-send|).
 - `format_ref`    (optional) `fun(self, path, range?): string`: how to
                   refer to a file in a prompt (|duet-context|). `path` is
                   relative to the project; `range` is `{ first, last }`
@@ -654,7 +656,15 @@ session:when_ready({timeout_ms}, {cb})
 session:input()
     What the agent's input box holds now, as its adapter's `read_input`
     reads it from the terminal's last lines, or `nil` if no input box is on
-    screen or the adapter has no `read_input`.
+    screen or the adapter has no `read_input`. Returns `nil` and an error
+    message if the agent is gone or `read_input` failed.
+
+                                                           *duet-session-poll*
+session:poll({timeout_ms}, {check}, {cb})
+    Call {check} now and then every 50 ms, without blocking, until it
+    returns `true` or `nil, err`, then call {cb} with that error (or none).
+    After {timeout_ms} milliseconds, {cb} gets `nil, true` (timed out)
+    instead. |duet-session-when_ready| is built on it.
 
 ==============================================================================
 10. SENDING TEXT                                                   *duet-send*

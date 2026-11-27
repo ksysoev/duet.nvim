@@ -118,24 +118,28 @@ function M.compact(text)
   return (text:gsub("%s", ""):gsub("\194\160", ""))
 end
 
----What the agent's input box holds, compacted (see M.compact), while `text` is in it: the
----whole text. nil for text with several lines or more than PROBE_TEXT_MAX bytes, which an
----agent may show as a summary such as `[Pasted text #1 +20 lines]`. Pure.
+---What the agent's input box ends with, compacted (see M.compact), while `text` is in it:
+---the whole text. nil for text with several lines or more than PROBE_TEXT_MAX bytes, which
+---an agent may show as a summary such as `[Pasted text #1 +20 lines]`, or text that is
+---only whitespace once compacted. Pure.
 ---@param text string sanitized text
 ---@return string|nil
 function M.probe(text)
   if text:find("\n") or #text > M.PROBE_TEXT_MAX then
     return nil
   end
-  return M.compact(text)
+  local probe = M.compact(text)
+  return probe ~= "" and probe or nil
 end
 
----Whether the input box `box` shows the text whose probe is `probe` (see M.probe).
+---Whether the input box `box` shows the text whose probe is `probe` (see M.probe): pasted
+---text goes at the end of the box, so a placeholder that only holds the same words, such
+---as Claude Code's `Try "write a test…"`, doesn't count.
 ---@param box string
----@param probe string|nil
+---@param probe string
 ---@return boolean
 local function shows(box, probe)
-  return probe ~= nil and M.compact(box):find(probe, 1, true) ~= nil
+  return vim.endswith(M.compact(box), probe)
 end
 
 ---@param session duet.Session
@@ -269,15 +273,23 @@ local function process(session)
         return
       end
       -- Wait until the agent has taken Enter in: the box has changed, and is back to what
-      -- it showed before the paste or no longer holds the text. Until then, a paste would
-      -- land in the text being submitted (Claude Code submits a slash command after a
-      -- moment, more so while it starts).
+      -- it showed before the paste, or no longer shows the text (without a probe: holds
+      -- less than at Enter, so a summary drawn late doesn't count). Until then, a paste
+      -- would land in the text being submitted (Claude Code submits a slash command after
+      -- a moment, more so while it starts).
+      local shown_size = #M.compact(shown or "")
       session:poll(M.SUBMIT_SETTLE_MS, function()
         local box = input()
         if not reading then
           return true
+        elseif box == nil or box == shown then
+          return false
+        elseif box == before then
+          return true
+        elseif probe then
+          return not shows(box, probe)
         end
-        return box ~= nil and box ~= shown and (box == before or not shows(box, probe))
+        return #M.compact(box) < shown_size
       end, function(_, timed_out)
         if timed_out then
           require("duet.log").debug("session %s: the input did not change after Enter", session.id)

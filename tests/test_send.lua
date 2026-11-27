@@ -80,6 +80,7 @@ T["probe()"] = MiniTest.new_set({
     { "without whitespace", "fix  the\tbug ", "fixthebug" },
     { "shell mode", "!echo duet-ok", "!echoduet-ok" },
     { "several lines", "one\ntwo", vim.NIL },
+    { "only no-break spaces", "\194\160\194\160", vim.NIL },
     { "a long text", string.rep("word ", 41), vim.NIL },
   },
 })
@@ -566,8 +567,8 @@ S["does not take a placeholder that shares a word for the paste"] = function()
   fake()
   with_read_input()
   child.lua([[
-    -- The box redraws its placeholder (which holds "test") at once, and shows the paste
-    -- 300 ms later. After Enter, it goes back to the placeholder.
+    -- The box redraws its placeholder (which holds the text, "test") at once, and shows
+    -- the paste 300 ms later. After Enter, it goes back to the placeholder.
     local placeholder = '> Try "write a test for it"'
     _G.box = placeholder
     _G.read_input = function() return _G.box end
@@ -580,16 +581,65 @@ S["does not take a placeholder that shares a word for the paste"] = function()
         vim.defer_fn(function() _G.box = placeholder end, 100)
       else
         _G.box = placeholder .. " "
-        vim.defer_fn(function() _G.box = "> add a test" end, 300)
+        vim.defer_fn(function() _G.box = "> test" end, 300)
       end
     end
-    _G.send("add a test")
-    _G.send("add a test")
+    _G.send("test")
+    _G.send("test")
   ]])
   eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
-  eq(child.lua_get("{ _G.seen[2][2], _G.seen[4][2] }"), { "> add a test", "> add a test" })
+  eq(child.lua_get("{ _G.seen[2][2], _G.seen[4][2] }"), { "> test", "> test" })
   -- The box went back to its placeholder: no need to wait out the settle time.
   eq(child.lua_get("_G.at[3] - _G.at[2] < 1000"), true)
+end
+
+S["takes a new placeholder that holds the text for Enter taken in"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    require("duet.send").SUBMIT_SETTLE_MS = 3000
+    -- The box shows the paste at once; Enter clears it to a placeholder that holds "y".
+    _G.box = "> "
+    _G.read_input = function() return _G.box end
+    _G.at = {}
+    local chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data)
+      chan_send(chan, data)
+      table.insert(_G.at, vim.uv.now())
+      _G.box = data == "\r" and '> Try "why is y set?"' or "> y"
+    end
+    _G.send("y")
+    _G.send("y")
+  ]])
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  eq(child.lua_get("_G.at[3] - _G.at[2] < 1000"), true)
+end
+
+S["waits for a long text's box to shrink after Enter"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    -- A two-line text: the box first shows part of it, Enter goes in, then the box shows
+    -- a summary (longer: not Enter taken in), and is cleared 300 ms later.
+    _G.box = "> "
+    _G.read_input = function() return _G.box end
+    _G.at = {}
+    local chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data)
+      chan_send(chan, data)
+      table.insert(_G.at, vim.uv.now())
+      if data == "\r" then
+        vim.defer_fn(function() _G.box = "> [Pasted text #1 +2 lines]" end, 50)
+        vim.defer_fn(function() _G.box = "> " end, 300)
+      else
+        _G.box = "> [Pas"
+      end
+    end
+    _G.send("one\ntwo")
+    _G.send("three\nfour")
+  ]])
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  eq(child.lua_get("_G.at[3] - _G.at[2] >= 300"), true)
 end
 
 S["waits the whole settle time when the paste showed late"] = function()
