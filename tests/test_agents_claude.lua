@@ -312,6 +312,161 @@ local ready_cases = {
     ready = false,
   },
   { name = "prompt marker without a rule", lines = { "some output", "❯ text" }, ready = false },
+  -- Captured from Claude Code 2.1.330 in an 80-column Neovim terminal, after `/copy` was
+  -- sent: the live input box has a no-break space after its `❯`.
+  {
+    name = "the slash-command menu in a Neovim terminal",
+    lines = {
+      " ▐▛███▛█   Claude Code v2.1.330",
+      "▝▜██████▀  Opus 5.5 · Claude Pro",
+      " ▝▝   ▝▝   ~/Documents/Dev/duet.nvim",
+      "",
+      "",
+      "❯ /clear" .. string.rep(" ", 72),
+      "",
+      string.rep("─", 80),
+      "❯\194\160/copy",
+      string.rep("─", 80),
+      "  ❯ /copy                       Copy the last response to clipboard (/copy 2",
+      "                                for the one before)",
+      "    /fork                       Copy this conversation into a new background",
+      "                                session and keep working here",
+    },
+    ready = true,
+  },
+  -- Captured from Claude Code 2.1.330 in a 100-column terminal, after pasting `/clear`.
+  {
+    name = "the slash-command menu below the input box",
+    lines = {
+      " ▐▛███▛█   Claude Code v2.1.330",
+      "▝▜██████▀  Opus 5.5 · Claude Pro",
+      " ▝▝   ▝▝   ~/Documents/Dev/duet.nvim",
+      "",
+      "",
+      RULE,
+      "❯ /clear",
+      RULE,
+      "  ❯ /clear                      Start a new session with empty context; loops carry over, and the",
+      "                                old one stays in /resume",
+      "",
+      "",
+    },
+    ready = true,
+  },
+  -- Captured likewise after pasting `/co` (cut short).
+  {
+    name = "the slash-command menu with several matches",
+    lines = {
+      "❯ /copy",
+      "  ⎿  No assistant message to copy",
+      RULE,
+      "❯ /co",
+      RULE,
+      "  ❯ /copy                       Copy the last response to clipboard (/copy 2 for the one before)",
+      "    /color                      Set the prompt bar color for this session",
+      "    /config                     Open settings",
+      "    /usage (cost)               Show session cost, plan usage, and activity stats",
+    },
+    ready = true,
+  },
+  {
+    -- From the issue: a notice between the input box and the menu.
+    name = "the slash-command menu below a notice",
+    lines = {
+      RULE,
+      "❯ /clear",
+      RULE,
+      "  ⚠ Transcript saving is off — …",
+      "  ❯ /clear                      Start a new session with empty context; …",
+    },
+    ready = true,
+  },
+  {
+    -- Captured likewise after pasting `/compact keep the tests`: arguments close the menu.
+    name = "a slash command with arguments",
+    lines = {
+      RULE,
+      "❯ /compact keep the tests",
+      RULE,
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      string.rep(" ", 70) .. "ctrl+y to paste deleted text",
+    },
+    ready = true,
+  },
+  {
+    name = "no command matches what was typed",
+    lines = { RULE, "❯ /nosuchcmd", RULE, '  No commands match "/nosuchcmd"' },
+    ready = true,
+  },
+  {
+    name = "a dialog choice that starts with a slash",
+    lines = {
+      RULE,
+      "❯ ",
+      RULE,
+      "⏺ an answer",
+      RULE,
+      " Pick a directory",
+      " ❯ /tmp/a",
+      "   /tmp/b",
+    },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above a permission dialog",
+    lines = {
+      RULE,
+      "❯ /clear",
+      RULE,
+      "  ❯ /clear   Start a new session",
+      "⏺ Bash(touch created.txt)",
+      RULE,
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    },
+    ready = false,
+  },
+  {
+    name = "a dialog choice that starts with a slash, right below an old input box",
+    lines = { RULE, "❯ ", RULE, " Pick a directory", " ❯ /tmp/a", "   /tmp/b" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above newer output",
+    lines = { RULE, "❯ /compact", RULE, "  ❯ /compact   Free up context", "⏺ Compacting…" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above a spinner",
+    lines = { RULE, "❯ /compact", RULE, "  ❯ /compact   Free up context", "", "· Compacting…" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above a dialog without a choice marker",
+    lines = { RULE, "❯ /clear", RULE, "  ❯ /clear   Start a new session", RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "a dialog choice that starts with a slash, below an old box holding a command",
+    lines = { RULE, "❯ /add-dir", RULE, " Pick a directory", " ❯ /tmp/a", "   /tmp/b" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above an indented result",
+    lines = { RULE, "❯ /compact", RULE, "  ❯ /compact   Free up context", "  ⎿  Compacted" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above indented dialog text",
+    lines = { RULE, "❯ /clear", RULE, "  ❯ /clear   Start a new session", " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "a slash-command choice without an input box above it",
+    lines = { "⏺ an answer", RULE, "  ❯ /clear   Start a new session" },
+    ready = false,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({

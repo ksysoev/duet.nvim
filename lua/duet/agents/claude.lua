@@ -11,6 +11,9 @@
 ---   (https://code.claude.com/docs/en/common-workflows). The docs give no form for a line
 ---   range, so the lines are named in words after the reference, and no way to quote a
 ---   path, so a path with whitespace is written without the `@`.
+--- - Slash commands: typing `/` opens a menu below the input box, and <Enter> runs its
+---   highlighted entry, which is the typed command when the full name is typed (a prefix
+---   such as `/co` runs the first match, `/copy`). Arguments after a space close the menu.
 
 local M = {}
 
@@ -160,21 +163,101 @@ local function is_prompt(line)
   return line == "!" or line:match("^!%s") ~= nil or vim.startswith(line, "!" .. NBSP)
 end
 
+---Whether `line` is the selected entry of the slash-command menu: `❯` indented by two
+---spaces before a command name, e.g. `  ❯ /clear   Start a new session…`. (Dialogs
+---indent their choice by one space.)
+---@param line string
+---@return boolean
+local function is_menu_choice(line)
+  return line:match("^  ❯ /%S") ~= nil
+end
+
+---The prompt line of the input box that the rule at `close` closes: the nearest prompt
+---line above it that sits right below a rule, with no rule in between (the lines between
+---are the rest of a multi-line input). nil if the rule doesn't close an input box.
+---@param lines string[]
+---@param close integer
+---@return integer|nil
+local function box_prompt(lines, close)
+  for i = close - 1, 2, -1 do
+    if is_rule(lines[i]) then
+      return nil
+    elseif is_prompt(lines[i]) and is_rule(lines[i - 1]) then
+      return i
+    end
+  end
+  return nil
+end
+
+---Whether `line` can be a row of the slash-command menu below its selected entry: another
+---entry (indented by four spaces), a wrapped description (indented further), or a blank
+---line. Claude Code's other output is indented less: `  ⎿ …` results, the `  ⏵⏵ …`
+---footer, dialog text.
+---@param line string
+---@return boolean
+local function is_menu_row(line)
+  return line:match("^%s*$") ~= nil or line:match("^    ") ~= nil
+end
+
+---Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude
+---Code puts a no-break space after the `❯` of the live input box (a plain space in the
+---transcript and the menu).
+---@param line string
+---@return boolean
+local function holds_command(line)
+  return vim.startswith(line, "❯ /") or vim.startswith(line, "❯" .. NBSP .. "/")
+end
+
+---If line `i` is the selected entry of the slash-command menu, the prompt line of the
+---input box the menu belongs to. The entry must hang below the box's closing rule (other
+---entries or a notice may come between), the box must hold a slash command, and only
+---menu rows may follow the entry, so a menu left above newer output doesn't count.
+---@param lines string[]
+---@param i integer
+---@return integer|nil
+local function menu_prompt(lines, i)
+  if not is_menu_choice(lines[i]) then
+    return nil
+  end
+  for j = i + 1, #lines do
+    if not is_menu_row(lines[j]) then
+      return nil
+    end
+  end
+  for j = i - 1, 2, -1 do
+    if lines[j]:find("❯", 1, true) then
+      return nil
+    elseif is_rule(lines[j]) then
+      local prompt = box_prompt(lines, j)
+      return prompt and holds_command(lines[prompt]) and prompt or nil
+    end
+  end
+  return nil
+end
+
+---The index of the last line that marks a choice with `❯`, or 1 if none does. Typing `/`
+---opens the slash-command menu below the input box, and its selected entry is marked
+---like a dialog's choice: the box's prompt counts instead (see menu_prompt).
+---@param lines string[]
+---@return integer
+local function last_marker(lines)
+  for i = #lines, 1, -1 do
+    if lines[i]:find("❯", 1, true) then
+      return menu_prompt(lines, i) or i
+    end
+  end
+  return 1
+end
+
 ---Whether the TUI shows its input prompt: a prompt line (see is_prompt) right below a
 ---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
 ---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
----screen counts: an older frame left in the scrollback above a dialog doesn't.
+---screen counts: an older frame left in the scrollback above a dialog doesn't. The
+---slash-command menu's `❯` doesn't count (see last_marker).
 ---@param lines string[] terminal buffer lines
 ---@return boolean
 function M:is_ready(lines)
-  local last = 1
-  for i = #lines, 1, -1 do
-    if lines[i]:find("❯", 1, true) then
-      last = i
-      break
-    end
-  end
-  for i = math.max(2, last), #lines do
+  for i = math.max(2, last_marker(lines)), #lines do
     if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
       return true
     end
