@@ -1115,11 +1115,34 @@ local function click(needle, key, offset, rest)
   -- A click lands in a window only once the screen shows it: until then it goes to the
   -- window below (a new floating terminal), which a slow runner can be clicking. Probe
   -- with a button no test uses until a probe lands in the terminal's window.
+  -- A probe that misses can leave Terminal mode or focus another window: put both back
+  -- before the next one, as they were before probing.
   child.lua([[
     _G.probed = nil
+    _G.modes = {}
+    _G.probe_from = { win = vim.api.nvim_get_current_win(), terminal = vim.api.nvim_get_mode().mode == "t" }
+    _G.probe_au = vim.api.nvim_create_autocmd("ModeChanged", {
+      callback = function()
+        table.insert(_G.modes, vim.v.event.old_mode .. ">" .. vim.v.event.new_mode)
+      end,
+    })
     vim.keymap.set({ "t", "n" }, "<X1Mouse>", function()
       _G.probed = vim.fn.getmousepos().winid
     end, { buffer = s.buf })
+    _G.unprobe = function()
+      _G.probed = nil
+      local mode = vim.api.nvim_get_mode().mode
+      if mode ~= "n" and mode ~= "t" then
+        vim.api.nvim_feedkeys(vim.keycode("<C-\\><C-N>"), "nx", false)
+      end
+      if vim.api.nvim_win_is_valid(_G.probe_from.win) then
+        vim.api.nvim_set_current_win(_G.probe_from.win)
+      end
+      if _G.probe_from.terminal and vim.api.nvim_get_mode().mode ~= "t" then
+        vim.cmd.startinsert()
+        wait(function() return vim.api.nvim_get_mode().mode == "t" end, 500)
+      end
+    end
   ]])
   local landed = false
   for _ = 1, 100 do
@@ -1129,9 +1152,9 @@ local function click(needle, key, offset, rest)
       landed = true
       break
     end
-    child.lua("_G.probed = nil; vim.wait(20)")
+    child.lua("_G.unprobe(); vim.wait(20)")
   end
-  child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf })")
+  child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf }); vim.api.nvim_del_autocmd(_G.probe_au)")
   if not landed then
     -- What the probes saw, for a runner where they never land.
     landed = child.lua_get(
@@ -1140,6 +1163,8 @@ local function click(needle, key, offset, rest)
         win = s:window(),
         config = s:window() and vim.api.nvim_win_get_config(s:window()),
         mode = vim.api.nvim_get_mode().mode,
+        modes = _G.modes,
+        current = vim.api.nvim_get_current_win(),
         mouse = vim.o.mouse,
         wins = vim.api.nvim_tabpage_list_wins(0),
         probed = _G.probed,
