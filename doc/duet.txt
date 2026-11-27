@@ -767,6 +767,7 @@ References duet recognizes ~
     `@lua/duet/init.lua`  `@a.lua (lines 10-20)`  as duet sends them
     `` `Makefile` ``                  any name in backticks
     `a.lua:12:text`  `a.lua:12:5:text`  grep and ripgrep matches
+    `a.lua-12-text`                 their context lines (`-C`)
     `File "a.py", line 10`          Python tracebacks
     `file:///abs/a.lua#L3`          file URIs
 Paths may be relative, absolute or start with `~`. They can be surrounded
@@ -774,6 +775,16 @@ by brackets, quotes or punctuation, as in `Read(a.lua)`, `(see a.lua:3).`
 or compiler output (`./a.go:12:3: …`). Without a line number, a word
 counts only if it has a `/` or an extension, starts with `@`, or is in
 backticks. URLs other than `file://` are not file links.
+
+Hyphens are common in file names, so a context line counts only when the
+whole word is not a file and the part before `-12-` is one that exists, with
+a `/` or an extension: `my-file-12-notes.md` stays a name.
+
+A reference that wraps at the terminal's width, whether the terminal wraps
+it or the agent's TUI does (Claude Code indents what follows), is still one
+link: `gf` works on either half. duet joins a row that fills the width with
+the next row, without its indent, and keeps the joined reference only when
+it names a file that exists.
 
 A relative path is looked up in the session's project root (|duet-terminal|),
 then in the git root that contains it. A reference to a file that does not
@@ -806,7 +817,7 @@ runs in). To turn it on or off regardless: >lua
     agents = { claude = { env = { FORCE_HYPERLINK = "1" } } }  -- "0": off
 <
 
-Limits: a reference broken over two lines by wrapping is not recognized.
+Limits: a reference that wraps over more than two rows is not recognized.
 Paths with spaces are only recognized as OSC 8 targets or `file://` URIs
 (with `%20`).
 
@@ -819,10 +830,21 @@ DuetLinkFlash     The line or range briefly highlighted when a link opens.
 
 Lua API ~
                                                           *duet.links.parse()*
-require("duet.links").parse({line})
+require("duet.links").parse({line}, {opts})
     The file references in the string {line}, without checking the files:
     a list of `{ path, line?, end_line?, col?, s, e }`, where `s` and `e`
-    are the 1-based byte columns of the reference (inclusive).
+    are the 1-based byte columns of the reference (inclusive). With
+    `opts.exists`, a function that tells whether a path is a file, grep
+    context lines are recognized too.
+
+                                                           *duet.links.find()*
+require("duet.links").find({lines}, {opts})
+    The links in the list of rows {lines} that resolve, joining references
+    wrapped from one row to the next. {opts} has `resolve`, a function from
+    a path to its absolute path or `nil`; `width`, the terminal's width in
+    cells (no rows are joined without it); and `first`, the buffer row of
+    the first line (default 1). Each link also has `row` and `abs`, and a
+    wrapped one `tail = { row, s, e }`, its part on the next row.
 
                                                         *duet.links.resolve()*
 require("duet.links").resolve({path}, {cwd})
