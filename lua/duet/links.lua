@@ -828,12 +828,21 @@ local function replaceable_window()
   return best
 end
 
----Whether `win` shows the file `abs`.
+---Whether `win` shows the file `abs`, under this name or another one for the same file
+---(a symlink, or `/var` for `/private/var` on macOS).
 ---@param win integer
 ---@param abs string normalized absolute path
 ---@return boolean
 local function shows(win, abs)
-  return vim.fs.normalize(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))) == abs
+  local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+  if name == "" then
+    return false
+  end
+  if vim.fs.normalize(name) == abs then
+    return true
+  end
+  local real = vim.uv.fs_realpath(name)
+  return real ~= nil and real == vim.uv.fs_realpath(abs)
 end
 
 ---The window to open `abs` in: a code window in the tab, else a start screen window,

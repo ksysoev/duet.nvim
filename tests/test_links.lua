@@ -710,6 +710,19 @@ T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the 
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
 end
 
+T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the file by another name"] = function()
+  -- Neovim resolves a symlinked directory in a buffer's name, but not a symlinked file.
+  vim.uv.fs_symlink(root .. "/a.lua", root .. "/alias.lua")
+  local pinned = show_code("alias.lua", true)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(0)")), "alias.lua")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), pinned)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+end
+
 T["terminal"]["a start screen is replaced"] = MiniTest.new_set({
   parametrize = { { "snacks_dashboard" }, { "alpha" }, { "dashboard" }, { "ministarter" }, { "startify" } },
 })
