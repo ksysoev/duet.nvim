@@ -857,6 +857,11 @@ require("duet.links").resolve({path}, {cwd})
     The absolute path {path} refers to, looked up as described above from
     {cwd} (default: the current directory), or `nil` and an error.
 
+                                                       *duet.links.resolver()*
+require("duet.links").resolver({cwd})
+    A function that does what |duet.links.resolve()| does for many paths
+    from one {cwd}, finding its git root once.
+
                                                            *duet.links.open()*
 require("duet.links").open({link}, {opts})
     Open a link (a table with `path` and optionally `line`, `end_line`,

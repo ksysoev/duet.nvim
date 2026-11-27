@@ -279,27 +279,40 @@ end
 ---@return string|nil abs normalized absolute path
 ---@return string|nil err
 function M.resolve(path, cwd)
-  local expanded = path
-  if path == "~" or vim.startswith(path, "~/") then
-    expanded = vim.fs.normalize(path)
-  end
-  local candidates = {}
-  if vim.startswith(expanded, "/") then
-    candidates[1] = expanded
-  else
-    cwd = vim.fs.normalize(vim.fs.abspath(cwd or vim.uv.cwd() or "."))
-    candidates[1] = vim.fs.joinpath(cwd, expanded)
-    local root = require("duet.util").git_root(cwd)
-    if root and root ~= cwd then
-      candidates[2] = vim.fs.joinpath(root, expanded)
+  return M.resolver(cwd)(path)
+end
+
+---A resolve() for many paths from one `cwd`: the git root is looked up once, when the
+---first path needs it.
+---@param cwd? string default: the current working directory
+---@return fun(path: string): string|nil, string|nil
+function M.resolver(cwd)
+  local base, root
+  return function(path)
+    local expanded = path
+    if path == "~" or vim.startswith(path, "~/") then
+      expanded = vim.fs.normalize(path)
     end
-  end
-  for _, candidate in ipairs(candidates) do
-    if vim.uv.fs_stat(candidate) then
-      return vim.fs.normalize(candidate), nil
+    local candidates = {}
+    if vim.startswith(expanded, "/") then
+      candidates[1] = expanded
+    else
+      if not base then
+        base = vim.fs.normalize(vim.fs.abspath(cwd or vim.uv.cwd() or "."))
+        root = require("duet.util").git_root(base) or false
+      end
+      candidates[1] = vim.fs.joinpath(base, expanded)
+      if root and root ~= base then
+        candidates[2] = vim.fs.joinpath(root, expanded)
+      end
     end
+    for _, candidate in ipairs(candidates) do
+      if vim.uv.fs_stat(candidate) then
+        return vim.fs.normalize(candidate), nil
+      end
+    end
+    return nil, ("links: no such file '%s'"):format(path)
   end
-  return nil, ("links: no such file '%s'"):format(path)
 end
 
 -- Buffers --------------------------------------------------------------------
@@ -324,7 +337,7 @@ end
 
 -- A row this many cells short of the terminal's width still counts as full when the TUI
 -- wrapped it: Claude Code breaks its prompt one cell early.
-local WRAP_SLACK = 2
+local WRAP_SLACK = 1
 
 ---@class duet.links.FindOpts
 ---@field resolve fun(path: string): string|nil the absolute path a link's path refers to
@@ -368,6 +381,9 @@ end
 ---@param width integer
 ---@return boolean
 local function one_word(head, indent, rest, token, width)
+  if indent == " " then
+    return false -- text the terminal wrapped, not an indent: TUIs indent by two or more
+  end
   if indent == "" then
     local cells = vim.fn.strdisplaywidth(head)
     return cells == width or (cells == width - 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, 1)) == 2)
@@ -392,11 +408,14 @@ function M.find(lines, opts)
     end
     return cache[path] or nil
   end
-  local file = opts.is_file or is_file
+  local files = {}
   local parse_opts = {
     exists = function(path)
       local abs = resolve(path)
-      return abs ~= nil and file(abs)
+      if abs and files[abs] == nil then
+        files[abs] = (opts.is_file or is_file)(abs)
+      end
+      return abs ~= nil and files[abs]
     end,
   }
   ---@type duet.Link[][]
@@ -421,8 +440,10 @@ function M.find(lines, opts)
           and link.e > #head
           and one_word(head, indent, rest, joined:sub(link.s, link.e), opts.width)
           and resolve(link.path)
-        if abs then
-          local tail_e = link.e - #head + #indent
+        local tail_e = link.e - #head + #indent
+        -- A tail that fills its row too may go on in a third row: not recognized.
+        local cut = tail_e == #lines[i + 1] and lines[i + 2] ~= nil and may_wrap(lines[i + 1], opts.width)
+        if abs and not cut then
           -- The parts on each row, found on their own, are replaced by the whole.
           rows[i] = vim.tbl_filter(function(other)
             return other.e < link.s
@@ -482,13 +503,7 @@ local function resolved_links(buf, first, last, cwd)
   local from = math.max(first - 1, 1)
   local to = math.min(last + 1, vim.api.nvim_buf_line_count(buf))
   local lines = vim.api.nvim_buf_get_lines(buf, from - 1, to, false)
-  local links = M.find(lines, {
-    first = from,
-    width = term_width(buf),
-    resolve = function(path)
-      return M.resolve(path, cwd)
-    end,
-  })
+  local links = M.find(lines, { first = from, width = term_width(buf), resolve = M.resolver(cwd) })
   return vim.tbl_filter(function(link)
     local tail = link.tail
     return (link.row >= first and link.row <= last) or (tail ~= nil and tail.row >= first and tail.row <= last)
@@ -660,13 +675,14 @@ function M.at_cursor(win)
   end
   -- Say why a reference under the cursor is not a link. Parsed as find() does, the text
   -- of a grep context line is not part of its reference.
+  local resolve = M.resolver(cwd)
   local exists = function(path)
-    local abs = M.resolve(path, cwd)
+    local abs = resolve(path)
     return abs ~= nil and is_file(abs)
   end
   for _, link in ipairs(M.parse(get_line(buf, row), { exists = exists })) do
     if link.s <= col and col <= link.e then
-      local _, err = M.resolve(link.path, cwd)
+      local _, err = resolve(link.path)
       return nil, err or NO_LINK
     end
   end

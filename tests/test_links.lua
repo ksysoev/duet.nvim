@@ -210,6 +210,18 @@ T["find()"] = MiniTest.new_set({
     },
     { "a context line naming a directory", { "docs/adr-0001-use-x.md" }, false, {} },
     {
+      "a space the terminal wrapped onto the next row",
+      { LONG .. ":1", " 2 tests" },
+      29,
+      { found(LONG, 1, 1, 29, { line = 1 }) },
+    },
+    {
+      "a reference over three rows",
+      { "aaaa lua/duet/so", "me/long/path.lua", ":5 b" },
+      16,
+      {},
+    },
+    {
       "a wrapped context line",
       { "lua/duet/some/long/pa", "th.lua-9-text" },
       21,
@@ -331,6 +343,12 @@ end
 T["resolve()"]["finds directories"] = function()
   local root = repo()
   eq(require("duet.links").resolve("dir", root), root .. "/dir")
+end
+
+T["resolve()"]["resolver() resolves many paths from one cwd"] = function()
+  local root = repo()
+  local resolve = require("duet.links").resolver(root .. "/lua")
+  eq({ resolve("a.lua"), resolve("top.lua"), (resolve("nope.lua")) }, { root .. "/lua/a.lua", root .. "/top.lua" })
 end
 
 T["resolve()"]["reports a missing file"] = function()
