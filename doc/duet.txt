@@ -883,7 +883,7 @@ you map them.
 Anywhere else, such as another window or a status line, the click does what
 it does without duet: your own global mapping of the key (for example
 `<C-LeftMouse>` for LSP go-to-definition), else Neovim's built-in action, with
-the count typed before it in normal mode. As Neovim does, in
+the register and count typed before it in normal mode. As Neovim does, in
 |Terminal-mode| with no Terminal-mode mapping of the key, the click leaves
 Terminal mode and gets your normal mode mapping. Only a click in a window
 showing the agent's terminal while that terminal is the current buffer is

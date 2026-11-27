@@ -1012,20 +1012,21 @@ function M.follow(opts)
 end
 
 ---The drag and release keys that go with a press `lhs`, such as `<C-LeftDrag>` and
----`<C-LeftRelease>` for `<C-LeftMouse>`, and its button (`"Left"`). Nil for a key that is
+---`<C-LeftRelease>` for `<C-LeftMouse>`, its button (`"Left"`) and click count (`""`, or
+---`"2-"` for a double click, whose drag and release carry it too). Nil for a key that is
 ---not a mouse button press.
 ---@param lhs string
----@return { drag: string, release: string, button: string }|nil
+---@return { drag: string, release: string, button: string, count: string }|nil
 function M.click_keys(lhs)
   local mods, button = vim.fn.keytrans(vim.keycode(lhs)):match("^<(.-)(%u%l+)Mouse>$")
   if not mods then
     return nil
   end
-  mods = mods:gsub("%d%-", "") -- a double-click's drag and release have no count
   return {
     drag = ("<%s%sDrag>"):format(mods, button),
     release = ("<%s%sRelease>"):format(mods, button),
     button = button,
+    count = mods:match("%d%-") or "",
   }
 end
 
@@ -1054,7 +1055,7 @@ local function keep_rest(buf, lhs)
   if not keys then
     return
   end
-  local plain = assert(M.click_keys(("<%sMouse>"):format(keys.button)))
+  local plain = assert(M.click_keys(("<%s%sMouse>"):format(keys.count, keys.button)))
   local skip = {}
   for other, action in pairs(require("duet.config").get().terminal.keys) do
     if action then
@@ -1110,6 +1111,14 @@ local function keep_multiclick(lhs)
     return
   end
   local in_press = false -- between a press that was dropped and its release
+  local last, at = first.count, vim.uv.hrtime() -- the count of the last press, and when
+  ---Whether press `k` goes on from the last one: Neovim counts up to 4, then from 1 again.
+  local function next_press(k)
+    if k.count == last + 1 then
+      return true
+    end
+    return last == 4 and k.count == 1 and (vim.uv.hrtime() - at) / 1e6 <= vim.o.mousetime
+  end
   vim.on_key(function(key, typed)
     if typed == "" then
       return nil -- not typed, e.g. keys a mapping or the code that opened the link fed
@@ -1124,8 +1133,8 @@ local function keep_multiclick(lhs)
       end
       return nil -- the drag or release of the first press
     end
-    if k and k.button == first.button and k.mods == first.mods and k.count > first.count and key == typed then
-      in_press = true
+    if k and k.button == first.button and k.mods == first.mods and next_press(k) and key == typed then
+      in_press, last, at = true, k.count, vim.uv.hrtime()
       return ""
     end
     vim.on_key(nil, multiclick_ns) -- another key, such as a new click
@@ -1133,23 +1142,8 @@ local function keep_multiclick(lhs)
   end, multiclick_ns)
 end
 
----Feed `keys` ahead of the keys already waiting, so a release that came with a click
----still follows it. A remapped `keys` that starts with `lhs` does not map `lhs` again,
----as for a mapping (see |recursive_mapping|).
----@param keys string raw key codes
----@param remap boolean
----@param lhs string raw key codes of the click
-local function feed_ahead(keys, remap, lhs)
-  if remap and vim.startswith(keys, lhs) then
-    -- Fed in reverse: each call goes in front of the one before.
-    vim.api.nvim_feedkeys(keys:sub(#lhs + 1), "mi", false)
-    vim.api.nvim_feedkeys(lhs, "ni", false)
-    return
-  end
-  vim.api.nvim_feedkeys(keys, remap and "mi" or "ni", false)
-end
-
----The global (not buffer-local) mapping of `lhs` in `mode`, as nvim_get_keymap() has it.
+---The global (not buffer-local) mapping of `lhs` in `mode`, as nvim_get_keymap() has
+---it. The terminal's buffer-local one is duet's own.
 ---@param lhs string raw key codes
 ---@param mode string
 ---@return table|nil
@@ -1162,50 +1156,73 @@ local function global_mapping(lhs, mode)
   return nil
 end
 
----Run `map`, a mapping of `lhs`, as Neovim would when `lhs` is typed after `count`.
+---The register given before the key in Normal mode, as `"x`, or "" for the default one.
+---@return string
+local function register_prefix()
+  local clipboard = vim.o.clipboard
+  local default = clipboard:find("unnamedplus") and "+" or clipboard:find("unnamed") and "*" or '"'
+  return vim.v.register ~= default and ('"' .. vim.v.register) or ""
+end
+
+local REPLAY = "<Plug>(duet-click)"
+
+---Keys to feed for `map`, a mapping of `code`, and the mapping to make for them: a copy
+---of `map` on `<Plug>(duet-click)`, so it runs as Neovim runs it, in its script and with
+---its flags. The copy is global: what is fed before it may change the buffer. Neovim does not map {lhs} again at the start of its own {rhs}: that part is
+---the built-in action, fed without mappings.
 ---@param map table from nvim_get_keymap()
----@param lhs string raw key codes
----@param count string the count typed before the click, or ""
-local function run_mapping(map, lhs, count)
-  local sid = ("<SNR>%d_"):format(map.sid or 0)
-  local keys
-  if map.callback then
-    keys = map.callback() -- sees v:count as it is
-    if map.expr ~= 1 then
-      return
-    end
-  elseif map.expr == 1 then
-    keys = vim.api.nvim_eval((map.rhs:gsub("<[Ss][Ii][Dd]>", sid)))
-  else
-    keys = vim.keycode((map.rhs:gsub("<[Ss][Ii][Dd]>", sid)))
+---@param code string raw key codes of the click
+---@return string first keys fed without mappings, or ""
+---@return table|nil copy the mapping to make on `<Plug>(duet-click)`, if any
+local function replay_plan(map, code)
+  map = vim.deepcopy(map)
+  local first = ""
+  if map.noremap ~= 1 and map.expr ~= 1 and map.rhs and vim.startswith(vim.keycode(map.rhs), code) then
+    first, map.rhs = code, vim.fn.keytrans(vim.keycode(map.rhs):sub(#code + 1))
   end
-  if type(keys) ~= "string" or keys == "" then
-    return
+  if not map.callback and (map.rhs or "") == "" then
+    return first, nil -- e.g. <Nop>
   end
-  if map.expr == 1 and map.replace_keycodes == 1 then
-    keys = vim.keycode(keys)
-  end
-  feed_ahead(count .. keys, map.noremap ~= 1, count .. lhs)
+  map.lhs, map.lhsraw, map.lhsrawalt, map.buffer = REPLAY, vim.keycode(REPLAY), nil, 0
+  return first, map
 end
 
 ---Do with a click `lhs` that is not on a duet terminal's text what Neovim does without
 ---duet's mapping: run your own global mapping of it, else the built-in action, after the
----count typed before it. In Terminal mode with no Terminal-mode mapping, Neovim leaves
----Terminal mode and reads the click again in Normal mode, where your mapping, or duet's
----own, gets it.
+---register and count typed before it. In Terminal mode with no Terminal-mode mapping,
+---Neovim leaves Terminal mode and reads the click again in Normal mode, where your
+---mapping, or duet's own, gets it.
 ---@param lhs string the key the action is mapped to
 local function replay(lhs)
   local code = vim.keycode(lhs)
   local terminal_mode = vim.api.nvim_get_mode().mode == "t"
-  local count = (not terminal_mode and vim.v.count > 0) and tostring(vim.v.count) or ""
-  local map = global_mapping(code, terminal_mode and "t" or "n")
-  if map then
-    run_mapping(map, code, count)
-  elseif terminal_mode and global_mapping(code, "n") then
+  local mode = terminal_mode and "t" or "n"
+  local map = global_mapping(code, mode)
+  if not map and terminal_mode and global_mapping(code, "n") then
     vim.api.nvim_feedkeys(code, "mi", false)
     vim.api.nvim_feedkeys(vim.keycode("<C-\\><C-N>"), "ni", false)
-  else
-    vim.api.nvim_feedkeys(count .. code, "ni", false)
+    return
+  end
+  local first, copy = code, nil
+  if map then
+    first, copy = replay_plan(map, code)
+  end
+  -- Fed ahead of the release or drag that may already be waiting: each feed with "i"
+  -- goes in front of the one before, so they are fed last key first.
+  if copy then
+    vim.fn.mapset(mode, false, copy)
+    vim.api.nvim_feedkeys(vim.keycode(REPLAY), "mi", false)
+    -- Scheduled work runs once the keys fed are read.
+    vim.schedule(function()
+      pcall(vim.keymap.del, mode, REPLAY)
+    end)
+  end
+  if first ~= "" then
+    vim.api.nvim_feedkeys(first, "ni", false)
+  end
+  local prefix = terminal_mode and "" or register_prefix() .. (vim.v.count > 0 and vim.v.count or "")
+  if prefix ~= "" and (copy or first ~= "") then
+    vim.api.nvim_feedkeys(prefix, "ni", false)
   end
 end
 

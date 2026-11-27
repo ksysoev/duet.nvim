@@ -307,12 +307,13 @@ end
 
 T["click_keys()"] = MiniTest.new_set({
   parametrize = {
-    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
-    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
-    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>", button = "Left" } },
-    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>", button = "Right" } },
-    { "<2-C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
-    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle" } },
+    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left", count = "" } },
+    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left", count = "" } },
+    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>", button = "Left", count = "" } },
+    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>", button = "Right", count = "" } },
+    -- A double click's drag and release carry its count.
+    { "<2-C-LeftMouse>", { drag = "<2-C-LeftDrag>", release = "<2-C-LeftRelease>", button = "Left", count = "2-" } },
+    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle", count = "" } },
     { "gf", nil },
     { "<C-LeftRelease>", nil },
   },
@@ -321,7 +322,13 @@ T["click_keys()"] = MiniTest.new_set({
 T["click_keys()"]["for %s"] = function(lhs, want)
   -- Compared as keys: `<M-C-LeftDrag>` is `<C-M-LeftDrag>`.
   local function codes(keys)
-    return keys and { drag = vim.keycode(keys.drag), release = vim.keycode(keys.release), button = keys.button }
+    return keys
+      and {
+        drag = vim.keycode(keys.drag),
+        release = vim.keycode(keys.release),
+        button = keys.button,
+        count = keys.count,
+      }
   end
   eq(codes(require("duet.links").click_keys(lhs)), codes(want))
 end
@@ -1403,6 +1410,42 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"] = MiniTest.new_
       { count = 0, code = true, name = "a.lua" },
     },
     {
+      "the register",
+      "n",
+      [[vim.keymap.set("n", "<C-LeftMouse>", "<Cmd>lua _G.hit = { count = vim.v.count, register = vim.v.register }<CR>")]],
+      '"a2<C-LeftMouse>',
+      { count = 2, register = "a", code = false },
+    },
+    {
+      "a Vimscript expression in its script",
+      "n",
+      [[local file = vim.fn.tempname() .. ".vim"
+      vim.fn.writefile({
+        "function! s:Pick() abort",
+        "  return \"\\<Cmd>lua _G.hit = { count = vim.v.count }\\<CR>\"",
+        "endfunction",
+        "nnoremap <expr> <C-LeftMouse> <SID>Pick()",
+      }, file)
+      vim.cmd.source(file)]],
+      "2<C-LeftMouse>",
+      { count = 2, code = false },
+    },
+    {
+      "a Vimscript expression with keys in its {rhs}",
+      "n",
+      [[vim.cmd("nnoremap <expr> <C-LeftMouse> v:count ? '<Cmd>lua _G.hit = { count = vim.v.count }<CR>' : ''")]],
+      "4<C-LeftMouse>",
+      { count = 4, code = false },
+    },
+    {
+      "keys with <script>, which map only script-local keys",
+      "n",
+      [[vim.keymap.set("n", "zz", "<Cmd>lua _G.wrong = true<CR>")
+      vim.cmd("nmap <script> <C-LeftMouse> <LeftMouse>zz<Cmd>lua _G.hit = { count = 0 }<CR>")]],
+      "<C-LeftMouse>",
+      { count = 0, code = true },
+    },
+    {
       "an expression",
       "t",
       [[vim.keymap.set("n", "<C-LeftMouse>", function()
@@ -1429,7 +1472,8 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"]["%s"] = functio
   click_code(code, keys)
   eq(child.lua_get("wait(function() return _G.hit ~= nil end)"), true)
   local hit = child.lua_get("_G.hit")
-  eq({ mode = hit.mode, count = hit.count }, { mode = want.mode, count = want.count })
+  eq({ hit.mode, hit.count, hit.register }, { want.mode, want.count, want.register })
+  eq(child.lua_get("_G.wrong"), vim.NIL)
   -- The code window is current only if the mapping clicked it: <C-LeftMouse> itself
   -- would make it so.
   eq(
@@ -1446,13 +1490,19 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"]["%s"] = functio
 end
 
 T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"] = MiniTest.new_set({
-  parametrize = { { "double", 2 }, { "triple", 3 } },
+  -- Neovim counts a fifth press as one again.
+  parametrize = { { "double", 2 }, { "triple", 3 }, { "five-times", 5 } },
 })
 
 T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"]["%s"] = function(_, presses)
   agent(TRACK .. "printf 'a.lua:1\\n'")
   local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
   local listeners = child.lua_get("vim.on_key()")
+  child.lua([[local open = L.open
+    L.open = function(...)
+      _G.opens = (_G.opens or 0) + 1
+      return open(...)
+    end]])
   terminal_mode()
   local rest = { "<C-LeftRelease>" }
   for _ = 2, presses do
@@ -1463,6 +1513,7 @@ T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"]["%
   vim.uv.sleep(100)
   eq(child.lua_get("{ vim.api.nvim_get_current_win(), vim.v.errmsg }"), { code, "" })
   eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("_G.opens"), 1)
   eq(reports(), {})
   -- The next key typed ends it.
   child.type_keys("<Esc>")
@@ -1476,6 +1527,16 @@ T["mouse"]["a double Ctrl+click on text without a link does nothing"] = function
   vim.uv.sleep(100)
   eq(reports(), {})
   eq(child.lua_get("{ vim.api.nvim_get_mode().mode, vim.v.errmsg }"), { "t", "" })
+end
+
+T["mouse"]["a double click mapped in terminal.keys keeps its own release"] = function()
+  agent(TRACK .. "printf 'nothing here\\n'", { terminal = { keys = { ["<2-C-LeftMouse>"] = "open_link_mouse" } } })
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftRelease> <C-LeftMouse> <C-LeftRelease>")
+  vim.uv.sleep(100)
+  eq(reports(), {})
+  eq(child.lua_get("{ vim.fn.maparg('<2-C-LeftRelease>', 't'), vim.fn.maparg('<C-LeftRelease>', 't') }"), { "", "" })
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
 end
 
 T["mouse"]["a Ctrl+click after a double Ctrl+click opens a link again"] = function()
