@@ -82,6 +82,137 @@ T["parse()"]["finds %s"] = function(_, line, want)
   eq(require("duet.links").parse(line), want)
 end
 
+-- Files that exist, for parse()'s `exists` and find()'s `resolve`.
+local FILES = {
+  ["a.lua"] = true,
+  ["lua/a.lua"] = true,
+  ["my-file.lua"] = true,
+  ["my-file-12-notes.md"] = true,
+  ["2024-01-05-notes.md"] = true,
+  ["Makefile"] = true,
+  ["lua/duet/some/long/path.lua"] = true,
+}
+
+local function exists(path)
+  return FILES[path] == true
+end
+
+T["parse() with exists"] = MiniTest.new_set({
+  parametrize = {
+    { "rg -C context line", "lua/a.lua-12-local M = {}", { link("lua/a.lua", 1, 12, { line = 12 }) } },
+    { "empty context line", "a.lua-7-", { link("a.lua", 1, 7, { line = 7 }) } },
+    { "hyphenated name in a context line", "my-file.lua-3-x", { link("my-file.lua", 1, 13, { line = 3 }) } },
+    { "dated name in a context line", "2024-01-05-notes.md-3-x", { link("2024-01-05-notes.md", 1, 21, { line = 3 }) } },
+    { "hyphenated name that exists", "see my-file-12-notes.md", { link("my-file-12-notes.md", 5, 23) } },
+    { "hyphenated name that does not", "see my-file-12-notes.md.bak", { link("my-file-12-notes.md.bak", 5, 27) } },
+    { "hyphen form of a missing file", "docs/x-1-y.md", { link("docs/x-1-y.md", 1, 13) } },
+    -- Without an extension or a `/`, the part before the number is too likely a word.
+    { "bare name in a context line", "Makefile-3-all:", {} },
+    { "match lines come first", "a.lua:3:x-1-y", { link("a.lua", 1, 7, { line = 3 }) } },
+    { "context line with colons in its text", "a.lua-4-x:5:y", { link("a.lua", 1, 7, { line = 4 }) } },
+  },
+})
+
+T["parse() with exists"]["finds %s"] = function(_, line, want)
+  eq(require("duet.links").parse(line, { exists = exists }), want)
+end
+
+T["parse() without exists"] = function()
+  -- Nothing to check the path against: the whole token is the name.
+  eq(require("duet.links").parse("lua/a.lua-12-local"), { link("lua/a.lua-12-local", 1, 18) })
+end
+
+-- find() -------------------------------------------------------------------------
+
+---@param path string
+---@param row integer
+---@param s integer
+---@param e integer
+---@param extra? table line, end_line, col, tail
+local function found(path, row, s, e, extra)
+  return vim.tbl_extend("force", link(path, s, e, extra), { row = row, abs = "/r/" .. path })
+end
+
+local LONG = "lua/duet/some/long/path.lua"
+
+T["find()"] = MiniTest.new_set({
+  parametrize = {
+    {
+      "a reference wrapped by the terminal",
+      { "xxxx lua/duet/so", "me/long/path.lua:120 after" },
+      16,
+      { found(LONG, 1, 6, 16, { line = 120, tail = { row = 2, s = 1, e = 20 } }) },
+    },
+    {
+      "a reference wrapped and indented by a TUI",
+      { "⏺ x lua/duet/some/long", "  /path.lua:12 y" },
+      22,
+      { found(LONG, 1, 7, 24, { line = 12, tail = { row = 2, s = 3, e = 14 } }) },
+    },
+    {
+      "a line number split by the wrap",
+      { "see lua/a.lua:1", "20 now" },
+      15,
+      { found("lua/a.lua", 1, 5, 15, { line = 120, tail = { row = 2, s = 1, e = 2 } }) },
+    },
+    {
+      "a row a cell short of the width",
+      { "xxxx lua/duet/so", "  me/long/path.lua" },
+      17,
+      { found(LONG, 1, 6, 16, { tail = { row = 2, s = 3, e = 18 } }) },
+    },
+    {
+      "a row that is not full",
+      { "xxxx lua/duet/so", "me/long/path.lua:120" },
+      30,
+      {},
+    },
+    {
+      "halves that do not join into a file",
+      { "aaaa a.lua:3", "a.lua" },
+      12,
+      { found("a.lua", 1, 6, 12, { line = 3 }), found("a.lua", 2, 1, 5) },
+    },
+    { "no width", { "xxxx lua/duet/so", "me/long/path.lua:120" }, false, {} },
+    {
+      "a wrapped context line",
+      { "lua/duet/some/long/pa", "th.lua-9-text" },
+      21,
+      { found(LONG, 1, 1, 21, { line = 9, tail = { row = 2, s = 1, e = 8 } }) },
+    },
+    {
+      "links on the rows around a wrapped one",
+      { "a.lua:1 lua/duet/some", "/long/path.lua:2 a.lua:3" },
+      21,
+      {
+        found("a.lua", 1, 1, 7, { line = 1 }),
+        found(LONG, 1, 9, 21, { line = 2, tail = { row = 2, s = 1, e = 16 } }),
+        found("a.lua", 2, 18, 24, { line = 3 }),
+      },
+    },
+  },
+})
+
+T["find()"]["finds %s"] = function(_, lines, width, want)
+  local got = require("duet.links").find(lines, {
+    width = width or nil,
+    resolve = function(path)
+      return exists(path) and ("/r/" .. path) or nil
+    end,
+  })
+  eq(got, want)
+end
+
+T["find()"]["starts at the given row"] = function()
+  local got = require("duet.links").find({ "a.lua:2" }, {
+    first = 7,
+    resolve = function(path)
+      return "/r/" .. path
+    end,
+  })
+  eq(got, { found("a.lua", 7, 1, 7, { line = 2 }) })
+end
+
 -- parse_ref() --------------------------------------------------------------------
 
 T["parse_ref()"] = MiniTest.new_set({
@@ -273,6 +404,53 @@ T["terminal"]["<CR> opens with the column"] = function()
   child.type_keys("<CR>")
   local at = child.lua_get("where()")
   eq({ rel(at.name), at.line, at.col }, { "lua/duet/init.lua", 12, 3 })
+end
+
+T["terminal"]["gf opens a grep context line at its line"] = function()
+  child.fn.writefile({ "x" }, root .. "/my-file-12-notes.md")
+  -- As `rg -C1 'line 12'` prints it, with a hyphenated name below.
+  agent(
+    "printf 'lua/duet/init.lua-11-line 11\\nlua/duet/init.lua:12:line 12\\nlua/duet/init.lua-13-line 13\\n"
+      .. "see my-file-12-notes.md\\n'"
+  )
+  child.lua("cursor_on('init.lua-13')")
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 13 })
+  child.lua("vim.cmd.wincmd('p'); cursor_on('my-file')")
+  child.type_keys("gf")
+  eq(rel(child.lua_get("where().name")), "my-file-12-notes.md")
+end
+
+-- Pads the line so that the reference starts 10 cells before the terminal's right edge.
+local WRAP = "sleep 0.2; w=$(stty size | cut -d' ' -f2); pad=$(printf '%%*s' $((w - 11)) '' | tr ' ' x); "
+  .. "printf '%%s %s after\\n' \"$pad\""
+
+T["terminal"]["gf works on either half of a wrapped reference"] = MiniTest.new_set({
+  parametrize = { { "head", "x lua" }, { "tail", "nit.lua:2" } },
+})
+
+T["terminal"]["gf works on either half of a wrapped reference"]["the %s"] = function(_, needle)
+  agent(WRAP:format("lua/duet/init.lua:25"))
+  child.lua("cursor_on('after')")
+  child.lua("cursor_on(...)", { needle })
+  if needle == "x lua" then
+    child.type_keys("2l") -- onto "lua"
+  end
+  child.type_keys("gf")
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 25 })
+end
+
+T["terminal"]["highlights both halves of a wrapped reference"] = function()
+  agent(WRAP:format("lua/duet/init.lua:25"), { links = { highlight = true, debounce_ms = 10 } })
+  local row = child.lua_get("cursor_on('after')")
+  local rows = child.lua_get([[(function()
+    local ns = vim.api.nvim_create_namespace("duet.links")
+    wait(function() return #vim.api.nvim_buf_get_extmarks(s.buf, ns, 0, -1, {}) == 2 end)
+    return vim.tbl_map(function(m) return m[2] + 1 end, vim.api.nvim_buf_get_extmarks(s.buf, ns, 0, -1, {}))
+  end)()]])
+  eq(rows, { row - 1, row })
 end
 
 T["terminal"]["a missing file shows a notification"] = function()
