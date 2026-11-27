@@ -163,12 +163,13 @@ local function is_prompt(line)
   return line == "!" or line:match("^!%s") ~= nil or vim.startswith(line, "!" .. NBSP)
 end
 
----Whether `line` is the selected entry of the slash-command menu: an indented `❯` before
----a command name, e.g. `  ❯ /clear   Start a new session…`.
+---Whether `line` is the selected entry of the slash-command menu: `❯` indented by two
+---spaces before a command name, e.g. `  ❯ /clear   Start a new session…`. (Dialogs
+---indent their choice by one space.)
 ---@param line string
 ---@return boolean
 local function is_menu_choice(line)
-  return line:match("^%s+❯ /%S") ~= nil
+  return line:match("^  ❯ /%S") ~= nil
 end
 
 ---The prompt line of the input box that the rule at `close` closes: the nearest prompt
@@ -189,11 +190,13 @@ local function box_prompt(lines, close)
 end
 
 ---Whether `line` can be a row of the slash-command menu below its selected entry: another
----entry, a wrapped description, or a blank line. All of them are indented.
+---entry (indented by four spaces), a wrapped description (indented further), or a blank
+---line. Claude Code's other output is indented less: `  ⎿ …` results, the `  ⏵⏵ …`
+---footer, dialog text.
 ---@param line string
 ---@return boolean
 local function is_menu_row(line)
-  return line:match("^%s") ~= nil or line == ""
+  return line:match("^%s*$") ~= nil or line:match("^    ") ~= nil
 end
 
 ---If line `i` is the selected entry of the slash-command menu, the prompt line of the

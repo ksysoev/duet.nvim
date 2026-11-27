@@ -363,10 +363,14 @@ end
 
 S["submits a slash command while Claude Code's command menu is open"] = function()
   -- Claude Code's screens and readiness rule: the input box, then (once the paste has
-  -- arrived) the box holding `/clear` with the command menu below it.
+  -- arrived) a cleared screen with the box holding `/clear` and the command menu below
+  -- it, so only the menu's screen can let Enter through.
   local rule = string.rep("─", 60)
   local box = ("printf '%%s\\r\\n' '%s' '❯ ' '%s'"):format(rule, rule)
-  local menu = ("printf '%%s\\r\\n' '%s' '❯ /clear' '%s' '  ❯ /clear    Start a new session'"):format(rule, rule)
+  local menu = ("printf '\\033[2J\\033[H'; printf '%%s\\r\\n' '%s' '❯ /clear' '%s' '  ❯ /clear    Start a new session'"):format(
+    rule,
+    rule
+  )
   local paste = #(P .. "/clear" .. E)
   fake(
     ([[stty raw -echo; %s; dd bs=1 count=%d of="$OUT" 2>/dev/null; %s; exec cat >> "$OUT"]]):format(box, paste, menu),

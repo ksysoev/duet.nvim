@@ -419,6 +419,21 @@ local ready_cases = {
     ready = false,
   },
   {
+    name = "a dialog choice that starts with a slash, below an old box holding a command",
+    lines = { RULE, "❯ /add-dir", RULE, " Pick a directory", " ❯ /tmp/a", "   /tmp/b" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above an indented result",
+    lines = { RULE, "❯ /compact", RULE, "  ❯ /compact   Free up context", "  ⎿  Compacted" },
+    ready = false,
+  },
+  {
+    name = "an old slash-command menu above indented dialog text",
+    lines = { RULE, "❯ /clear", RULE, "  ❯ /clear   Start a new session", " Press Enter to continue" },
+    ready = false,
+  },
+  {
     name = "a slash-command choice without an input box above it",
     lines = { "⏺ an answer", RULE, "  ❯ /clear   Start a new session" },
     ready = false,
