@@ -1039,6 +1039,26 @@ local function click(needle, key, offset, rest)
     end)(...)]],
     { needle, offset or 0 }
   )
+  -- A click lands in a window only once the screen shows it: until then it goes to the
+  -- window below (a new floating terminal), which a slow runner can be clicking. Probe
+  -- with a button no test uses until a probe lands in the terminal's window.
+  child.lua([[
+    _G.probed = nil
+    vim.keymap.set({ "t", "n" }, "<X1Mouse>", function()
+      _G.probed = vim.fn.getmousepos().winid
+    end, { buffer = s.buf })
+  ]])
+  local landed = false
+  for _ = 1, 100 do
+    child.api.nvim_input(("<X1Mouse><%d,%d>"):format(pos[2], pos[1]))
+    if child.lua_get("wait(function() return _G.probed ~= nil end, 100) and _G.probed == s:window()") then
+      landed = true
+      break
+    end
+    child.lua("_G.probed = nil; vim.wait(20)")
+  end
+  child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf })")
+  eq({ needle, landed }, { needle, true })
   local keys = vim.iter({ key or "<C-LeftMouse>", rest and vim.split(rest, " ") or nil }):flatten():totable()
   for _, k in ipairs(keys) do
     child.api.nvim_input(("%s<%d,%d>"):format(k, pos[2], pos[1]))
