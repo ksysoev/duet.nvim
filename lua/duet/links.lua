@@ -752,7 +752,7 @@ local SPLIT_FROM = { right = "leftabove vnew", left = "rightbelow vnew", bottom 
 
 ---Whether a file may be opened in `win` in place of what it shows: a start screen (a
 ---filetype in `links.replace_filetypes`) that is not modified, in a window that is not
----floating, not a duet terminal and does not fix its buffer.
+---floating, not a terminal and does not fix its buffer.
 ---@param win integer
 ---@param filetypes string[]
 ---@return boolean
@@ -763,6 +763,7 @@ local function is_replaceable(win, filetypes)
   local buf = vim.api.nvim_win_get_buf(win)
   return vim.api.nvim_win_get_config(win).relative == ""
     and vim.b[buf].duet_session == nil
+    and vim.bo[buf].buftype ~= "terminal"
     and not vim.wo[win].winfixbuf
     and not vim.bo[buf].modified
     and vim.tbl_contains(filetypes, vim.bo[buf].filetype)
@@ -854,9 +855,9 @@ local function restore_layout(undo)
   if replaced and vim.api.nvim_win_is_valid(replaced.win) then
     local shown = vim.api.nvim_win_get_buf(replaced.win)
     if shown ~= replaced.buf then
-      -- The start screen comes back if it still exists. Most are wiped when left: the
-      -- window then gets an empty buffer, as after the start screen's own `:enew`.
-      if vim.api.nvim_buf_is_valid(replaced.buf) then
+      -- The start screen comes back if it is still loaded. Most are wiped when left:
+      -- the window then gets an empty buffer, as after the start screen's own `:enew`.
+      if vim.api.nvim_buf_is_loaded(replaced.buf) then
         pcall(vim.api.nvim_win_set_buf, replaced.win, replaced.buf)
       else
         pcall(vim.api.nvim_win_call, replaced.win, vim.cmd.enew)

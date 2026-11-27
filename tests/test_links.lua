@@ -654,7 +654,7 @@ T["terminal"]["a sidebar is not replaced"] = function()
 end
 
 T["terminal"]["a start screen is not replaced"] = MiniTest.new_set({
-  parametrize = { { "modified" }, { "winfixbuf" }, { "replace_filetypes = {}" } },
+  parametrize = { { "modified" }, { "winfixbuf" }, { "a terminal" }, { "replace_filetypes = {}" } },
 })
 
 T["terminal"]["a start screen is not replaced"]["when %s"] = function(kind)
@@ -665,6 +665,13 @@ T["terminal"]["a start screen is not replaced"]["when %s"] = function(kind)
     eq(child.lua_get("vim.bo.modified"), true)
   elseif kind == "winfixbuf" then
     child.lua("vim.wo.winfixbuf = true")
+  elseif kind == "a terminal" then
+    -- One with a filetype the user listed, e.g. another plugin's terminal.
+    child.lua([[
+      vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(false, true))
+      vim.fn.jobstart({ "cat" }, { term = true })
+      vim.bo.filetype = "snacks_dashboard"
+    ]])
   end
   agent("printf 'a.lua:1\\n'", kind == "replace_filetypes = {}" and { links = { replace_filetypes = {} } } or {})
   follow_from()
@@ -708,7 +715,7 @@ T["terminal"]["of start screens as wide, the tallest is used"] = function()
 end
 
 T["terminal"]["a file that fails to open in place of a start screen"] = MiniTest.new_set({
-  parametrize = { { "hide" }, { "wipe" } },
+  parametrize = { { "hide" }, { "unload" }, { "wipe" } },
 })
 
 T["terminal"]["a file that fails to open in place of a start screen"]["with bufhidden=%s"] = function(bufhidden)
@@ -728,7 +735,7 @@ T["terminal"]["a file that fails to open in place of a start screen"]["with bufh
     eq(shown, buf)
   else
     -- It is gone: the window shows an empty buffer, not the one that failed.
-    eq(child.lua_get("vim.api.nvim_buf_is_valid(...)", { buf }), false)
+    eq(child.lua_get("vim.api.nvim_buf_is_loaded(...)", { buf }), false)
     eq(
       child.lua_get("(function(b) return { vim.api.nvim_buf_get_name(b), vim.bo[b].buftype } end)(...)", { shown }),
       { "", "" }
