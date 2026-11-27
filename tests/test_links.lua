@@ -684,6 +684,43 @@ T["terminal"]["the previous start screen window is preferred, then the widest"] 
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 4)
 end
 
+T["terminal"]["the current start screen window is preferred"] = function()
+  local wide = screen("alpha")
+  local narrow = screen("alpha", "topleft vertical 20 new")
+  agent("printf 'a.lua:1\\n'")
+  -- open() called from a start screen, e.g. by a user's mapping, with another one as
+  -- the previous window.
+  child.lua("vim.api.nvim_set_current_win(...)", { wide })
+  child.lua("vim.api.nvim_set_current_win(...)", { narrow })
+  eq(child.lua_get("L.open({ path = 'a.lua' })"), true)
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), narrow)
+end
+
+T["terminal"]["of start screens as wide, the tallest is used"] = function()
+  local tall = screen("alpha")
+  screen("alpha", "aboveleft 3 new")
+  local sidebar = screen("neo-tree", "topleft vertical 15 new")
+  agent("printf 'a.lua:1\\n'")
+  follow_from(sidebar)
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), tall)
+end
+
+T["terminal"]["a start screen comes back when the file fails to open"] = function()
+  local dashboard = screen("snacks_dashboard")
+  local buf = child.lua_get("vim.api.nvim_get_current_buf()")
+  agent("printf 'a.lua:1\\n'")
+  child.lua([[vim.api.nvim_create_autocmd("BufReadCmd", {
+    pattern = "*/a.lua",
+    callback = function() error("cannot read") end,
+  })]])
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { dashboard }), buf)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
+end
+
 T["terminal"]["]l and [l move between links that resolve"] = function()
   agent("printf 'a.lua:1 nope.lua:2 b.lua:3\\nthen c.lua:4\\n'")
   local row = child.lua_get("cursor_on('a.lua')")

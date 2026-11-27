@@ -742,6 +742,7 @@ local SPLIT_FROM = { right = "leftabove vnew", left = "rightbelow vnew", bottom 
 ---@field hidden? duet.Session the floating terminal it hid
 ---@field buf? integer the empty buffer the split opened with; a failed `:edit` may
 ---have named it
+---@field replaced? { win: integer, buf: integer } the start screen the file was to replace
 
 ---Whether a file may be opened in `win` in place of what it shows: a start screen (a
 ---filetype in `links.replace_filetypes`) that is not modified, in a window that is not
@@ -761,24 +762,26 @@ local function is_replaceable(win, filetypes)
     and vim.tbl_contains(filetypes, vim.bo[buf].filetype)
 end
 
----A start screen window in the tab to open a file in: the previous window when it is
----one, else the widest. See is_replaceable().
+---A start screen window in the tab to open a file in: the current window when it is
+---one, else the previous window, else the widest (then the tallest). See
+---is_replaceable().
 ---@return integer|nil win
 local function replaceable_window()
   local filetypes = require("duet.config").get().links.replace_filetypes
   if #filetypes == 0 then
     return nil
   end
-  local prev = vim.fn.win_getid(vim.fn.winnr("#"))
-  if is_replaceable(prev, filetypes) then
-    return prev
+  for _, win in ipairs({ vim.api.nvim_get_current_win(), vim.fn.win_getid(vim.fn.winnr("#")) }) do
+    if is_replaceable(win, filetypes) then
+      return win
+    end
   end
-  local best, best_width
+  local best, best_size
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if is_replaceable(win, filetypes) then
-      local width = vim.api.nvim_win_get_width(win)
-      if not best or width > best_width then
-        best, best_width = win, width
+      local size = { vim.api.nvim_win_get_width(win), vim.api.nvim_win_get_height(win) }
+      if not best or size[1] > best_size[1] or (size[1] == best_size[1] and size[2] > best_size[2]) then
+        best, best_size = win, size
       end
     end
   end
@@ -813,6 +816,7 @@ local function target_window()
   end
   local start_screen = replaceable_window()
   if start_screen then
+    undo.replaced = { win = start_screen, buf = vim.api.nvim_win_get_buf(start_screen) }
     return start_screen, undo
   end
   vim.cmd(SPLIT_FROM[vim.w[cur].duet_layout] or "leftabove vnew")
@@ -830,6 +834,17 @@ local function restore_layout(undo)
   local buf = undo.buf
   if buf and vim.api.nvim_buf_is_valid(buf) and not vim.bo[buf].modified and #vim.fn.win_findbuf(buf) == 0 then
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+  -- A start screen that was left before `:edit` failed is shown again, unless it was
+  -- wiped on leaving (as most are).
+  local replaced = undo.replaced
+  if
+    replaced
+    and vim.api.nvim_win_is_valid(replaced.win)
+    and vim.api.nvim_buf_is_valid(replaced.buf)
+    and vim.api.nvim_win_get_buf(replaced.win) ~= replaced.buf
+  then
+    pcall(vim.api.nvim_win_set_buf, replaced.win, replaced.buf)
   end
   if undo.hidden then
     local win = undo.hidden:show()
