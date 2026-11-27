@@ -216,6 +216,12 @@ T["find()"] = MiniTest.new_set({
       { found(LONG, 1, 1, 29, { line = 1 }) },
     },
     {
+      "a TUI's rows padded with spaces",
+      { "  x lua/duet/some/lon ", "  g/path.lua:3 y      " },
+      22,
+      { found(LONG, 1, 5, 21, { line = 3, tail = { row = 2, s = 3, e = 14 } }) },
+    },
+    {
       "a reference over three rows",
       { "aaaa lua/duet/so", "me/long/path.lua", ":5 b" },
       16,

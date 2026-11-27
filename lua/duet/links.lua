@@ -353,14 +353,13 @@ local function is_file(abs)
   return stat ~= nil and stat.type == "file"
 end
 
----Whether row `head` may go on in the next row: it ends with something other than a
----space and fills the terminal's width, but is not wider (rows from before the terminal
----was narrowed).
+---Whether row `head`, without its trailing spaces, may go on in the next row: it fills
+---the terminal's width, but is not wider (rows from before the terminal was narrowed).
 ---@param head string
 ---@param width? integer
 ---@return boolean
 local function may_wrap(head, width)
-  if not width or not head:find("%S$") then
+  if not width or head == "" then
     return false
   end
   local cells = vim.fn.strdisplaywidth(head)
@@ -430,9 +429,13 @@ function M.find(lines, opts)
       end
     end
   end
+  -- A TUI pads the rows it draws with spaces, which the terminal keeps in the buffer.
+  local trimmed = vim.tbl_map(function(text)
+    return (text:gsub("%s+$", ""))
+  end, lines)
   for i = 1, #lines - 1 do
-    local head = lines[i]
-    local indent, rest = lines[i + 1]:match("^(%s*)(.*)$")
+    local head = trimmed[i]
+    local indent, rest = trimmed[i + 1]:match("^(%s*)(.*)$")
     if rest ~= "" and may_wrap(head, opts.width) then
       local joined = head .. rest
       for _, link in ipairs(M.parse(joined, parse_opts)) do
@@ -442,7 +445,7 @@ function M.find(lines, opts)
           and resolve(link.path)
         local tail_e = link.e - #head + #indent
         -- A tail that fills its row too may go on in a third row: not recognized.
-        local cut = tail_e == #lines[i + 1] and lines[i + 2] ~= nil and may_wrap(lines[i + 1], opts.width)
+        local cut = tail_e == #trimmed[i + 1] and lines[i + 2] ~= nil and may_wrap(trimmed[i + 1], opts.width)
         if abs and not cut then
           -- The parts on each row, found on their own, are replaced by the whole.
           rows[i] = vim.tbl_filter(function(other)
