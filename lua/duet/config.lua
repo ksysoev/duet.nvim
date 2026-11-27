@@ -32,6 +32,7 @@ M.defaults = {
       ["<CR>"] = "open_link",
       ["]l"] = "next_link",
       ["[l"] = "prev_link",
+      ["<C-LeftMouse>"] = "open_link_mouse",
     },
   },
   send = {
@@ -119,7 +120,7 @@ local function validate_border(v)
   return is_string_list(v) and vim.tbl_contains({ 1, 2, 4, 8 }, #v)
 end
 
-local KEY_ACTIONS = { "normal_mode", "hide", "open_link", "next_link", "prev_link" }
+local KEY_ACTIONS = { "normal_mode", "hide", "open_link", "open_link_mouse", "next_link", "prev_link" }
 
 local function validate_key_action(v)
   return v == false or (type(v) == "string" and vim.tbl_contains(KEY_ACTIONS, v))
@@ -160,7 +161,7 @@ M.schema = {
   ["terminal.keys"] = { type = "table", open = true },
   ["terminal.keys.*"] = {
     type = validate_key_action,
-    desc = '"normal_mode", "hide", "open_link", "next_link", "prev_link" or false',
+    desc = '"normal_mode", "hide", "open_link", "open_link_mouse", "next_link", "prev_link" or false',
   },
   links = { type = "table" },
   ["links.highlight"] = { type = "boolean" },

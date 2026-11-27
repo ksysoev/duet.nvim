@@ -657,15 +657,14 @@ local function osc8_at(buf, row, col, cwd)
   return nil
 end
 
----The link under the cursor in `win`, resolved. An OSC 8 hyperlink there comes first.
----@param win? integer default: the current window
+---The link at a position in `win`, resolved. An OSC 8 hyperlink there comes first.
+---@param win integer
+---@param row integer 1-based buffer row
+---@param col integer 1-based byte column
 ---@return duet.Link|nil link
 ---@return string|nil err a link that does not resolve, or no link at all
-function M.at_cursor(win)
-  win = win or vim.api.nvim_get_current_win()
+function M.at(win, row, col)
   local buf = vim.api.nvim_win_get_buf(win)
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local row, col = cursor[1], cursor[2] + 1
   local cwd = M.cwd(buf)
   local osc8 = osc8_at(buf, row, col, cwd)
   if osc8 then
@@ -690,6 +689,35 @@ function M.at_cursor(win)
     end
   end
   return nil, NO_LINK
+end
+
+---The link under the cursor in `win`, resolved. An OSC 8 hyperlink there comes first.
+---@param win? integer default: the current window
+---@return duet.Link|nil link
+---@return string|nil err a link that does not resolve, or no link at all
+function M.at_cursor(win)
+  win = win or vim.api.nvim_get_current_win()
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  return M.at(win, cursor[1], cursor[2] + 1)
+end
+
+---The link under the mouse, from |getmousepos()| in a mapping for a click, resolved. Only
+---text in a duet terminal counts.
+---@return duet.Link|nil link
+---@return integer|nil win the window clicked, when the click was on a duet terminal's text
+function M.at_mouse()
+  local pos = vim.fn.getmousepos()
+  local win = pos.winid
+  if win == 0 or pos.line == 0 or not vim.api.nvim_win_is_valid(win) then
+    return nil, nil -- the command line, a status line or a separator
+  end
+  if pos.wincol <= vim.fn.getwininfo(win)[1].textoff then
+    return nil, nil -- the number, sign or fold column, where `column` is 1
+  end
+  if vim.b[vim.api.nvim_win_get_buf(win)].duet_session == nil then
+    return nil, nil
+  end
+  return (M.at(win, pos.line, pos.column)), win
 end
 
 ---The first and last buffer rows shown in `win`.
@@ -962,6 +990,108 @@ function M.follow(opts)
   end
 end
 
+---The drag and release keys that go with a press `lhs`, such as `<C-LeftDrag>` and
+---`<C-LeftRelease>` for `<C-LeftMouse>`, and its button (`"Left"`). Nil for a key that is
+---not a mouse button press.
+---@param lhs string
+---@return { drag: string, release: string, button: string }|nil
+function M.click_keys(lhs)
+  local mods, button = vim.fn.keytrans(vim.keycode(lhs)):match("^<(.-)(%u%l+)Mouse>$")
+  if not mods then
+    return nil
+  end
+  mods = mods:gsub("%d%-", "") -- a double-click's drag and release have no count
+  return {
+    drag = ("<%s%sDrag>"):format(mods, button),
+    release = ("<%s%sRelease>"):format(mods, button),
+    button = button,
+  }
+end
+
+-- The drag and release keys mapped for the rest of a click that click() kept, by buffer.
+---@type table<integer, string[]>
+local kept = {}
+
+---Remove the mappings keep_rest() made in `buf`.
+---@param buf integer
+local function end_kept(buf)
+  for _, key in ipairs(kept[buf] or {}) do
+    pcall(vim.keymap.del, { "t", "n" }, key, { buffer = buf })
+  end
+  kept[buf] = nil
+end
+
+---Keep the rest of a click whose press click() kept, in terminal `buf`: map its drag and
+---release, with and without the modifiers (they may be let go first), until a release
+---comes. The agent then gets no release without its press, and a drag does not leave
+---Terminal mode. Keys mapped in `terminal.keys` keep their action.
+---@param buf integer
+---@param lhs string the press
+local function keep_rest(buf, lhs)
+  end_kept(buf)
+  local keys = M.click_keys(lhs)
+  if not keys then
+    return
+  end
+  local plain = assert(M.click_keys(("<%sMouse>"):format(keys.button)))
+  local skip = {}
+  for other, action in pairs(require("duet.config").get().terminal.keys) do
+    if action then
+      skip[vim.keycode(other)] = true
+    end
+  end
+  local mapped = {}
+  for _, key in ipairs({ keys.drag, keys.release, plain.drag, plain.release }) do
+    if not skip[vim.keycode(key)] then
+      skip[vim.keycode(key)] = true
+      local ends = key == keys.release or key == plain.release
+      vim.keymap.set({ "t", "n" }, key, function()
+        if ends then
+          end_kept(buf)
+        end
+      end, { buffer = buf, desc = "duet: the rest of a click kept for a file link" })
+      mapped[#mapped + 1] = key
+    end
+  end
+  kept[buf] = mapped
+end
+
+---Open the link under the mouse (the `"open_link_mouse"` key action, mapped to a click
+---in Terminal and Normal mode). A click on a duet terminal's text that is not a link does
+---nothing. A click anywhere else, such as another window or a status line, gets Neovim's
+---built-in action for `lhs`.
+---@param lhs string the key the action is mapped to, e.g. `"<C-LeftMouse>"`
+function M.click(lhs)
+  local link, win = M.at_mouse()
+  if not win then
+    -- Ahead of the release or drag that may already be waiting.
+    vim.api.nvim_feedkeys(vim.keycode(lhs), "ni", false)
+    return
+  end
+  if not link then
+    keep_rest(vim.api.nvim_get_current_buf(), lhs)
+    return
+  end
+  local from, terminal_mode = vim.api.nvim_get_current_win(), vim.api.nvim_get_mode().mode == "t"
+  if win ~= from then
+    vim.api.nvim_set_current_win(win)
+  end
+  local ok, err = M.open(link)
+  if not ok then
+    -- open() restored the clicked window; go back to where the click came from.
+    if vim.api.nvim_win_is_valid(from) and vim.api.nvim_get_current_win() ~= from then
+      vim.api.nvim_set_current_win(from)
+    end
+    if terminal_mode and vim.bo.buftype == "terminal" then
+      vim.cmd.startinsert()
+    end
+    if vim.b.duet_session ~= nil then
+      keep_rest(vim.api.nvim_get_current_buf(), lhs)
+    end
+    require("duet.util").notify(err or "links: nothing to open", vim.log.levels.WARN)
+  end
+end
+
 ---Move the cursor to the next (`dir` 1) or previous (`dir` -1) link in the visible
 ---lines, `count` times (the `"next_link"` and `"prev_link"` key actions).
 ---@param dir 1|-1
@@ -1084,6 +1214,42 @@ function M.attach_highlighter(buf)
     end,
   })
   schedule()
+end
+
+-- Health ---------------------------------------------------------------------
+
+---Report on opening links with a mouse click (for |duet-health|): the keys bound to
+---`"open_link_mouse"`, and whether 'mouse' lets the click reach Neovim: Terminal and
+---Normal mode get clicks with its `n` flag (or `a`).
+function M.health()
+  local keys = {}
+  for lhs, action in pairs(require("duet.config").get().terminal.keys) do
+    if action == "open_link_mouse" then
+      keys[#keys + 1] = lhs
+    end
+  end
+  if #keys == 0 then
+    vim.health.info("no key in terminal.keys opens a link with a mouse click")
+    return
+  end
+  table.sort(keys)
+  local names = table.concat(keys, ", ")
+  for _, lhs in ipairs(keys) do
+    if not M.click_keys(lhs) then
+      vim.health.warn(("%s opens the link under the mouse but is not a mouse click"):format(lhs), {
+        "Bind `open_link_mouse` to a mouse key such as `<C-LeftMouse>`: in Terminal mode this key no longer reaches the agent",
+      })
+    end
+  end
+  local mouse = vim.o.mouse
+  if not mouse:find("[an]") then
+    vim.health.warn(
+      ("'mouse' is %q, so the terminal gets no mouse clicks and %s cannot open links"):format(mouse, names),
+      { "Enable the mouse in Normal mode, e.g. `vim.o.mouse = 'nvi'` (the default) or 'a'" }
+    )
+  else
+    vim.health.ok(("%s opens links ('mouse' is %q)"):format(names, vim.o.mouse))
+  end
 end
 
 -- OSC 8 ----------------------------------------------------------------------

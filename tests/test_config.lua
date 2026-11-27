@@ -39,6 +39,7 @@ local merge_cases = {
         ["<CR>"] = "open_link",
         ["]l"] = "next_link",
         ["[l"] = "prev_link",
+        ["<C-LeftMouse>"] = "open_link_mouse",
       })
       eq(c.review, { a = { b = 1 } })
       eq(c.agent, "claude")
@@ -54,7 +55,17 @@ local merge_cases = {
         gf = "open_link",
         ["]l"] = "next_link",
         ["[l"] = "prev_link",
+        ["<C-LeftMouse>"] = "open_link_mouse",
       })
+    end,
+  },
+  {
+    name = "mouse keys spelled differently replace the default",
+    opts = { terminal = { keys = { ["<c-leftmouse>"] = false, ["<C-M-LeftMouse>"] = "open_link_mouse" } } },
+    check = function(c)
+      eq(c.terminal.keys["<C-LeftMouse>"], nil)
+      eq(c.terminal.keys["<c-leftmouse>"], false)
+      eq(c.terminal.keys["<C-M-LeftMouse>"], "open_link_mouse")
     end,
   },
   {

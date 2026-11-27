@@ -305,6 +305,27 @@ end
 
 -- resolve() ----------------------------------------------------------------------
 
+T["click_keys()"] = MiniTest.new_set({
+  parametrize = {
+    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
+    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
+    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>", button = "Left" } },
+    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>", button = "Right" } },
+    { "<2-C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
+    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle" } },
+    { "gf", nil },
+    { "<C-LeftRelease>", nil },
+  },
+})
+
+T["click_keys()"]["for %s"] = function(lhs, want)
+  -- Compared as keys: `<M-C-LeftDrag>` is `<C-M-LeftDrag>`.
+  local function codes(keys)
+    return keys and { drag = vim.keycode(keys.drag), release = vim.keycode(keys.release), button = keys.button }
+  end
+  eq(codes(require("duet.links").click_keys(lhs)), codes(want))
+end
+
 T["resolve()"] = MiniTest.new_set()
 
 local function repo()
@@ -990,6 +1011,250 @@ T["terminal"]["ignores text written over an OSC 8 link right after it"] = functi
 end
 
 -- open() -------------------------------------------------------------------------
+
+-- Mouse clicks -------------------------------------------------------------------
+
+-- printf commands that turn on mouse tracking (SGR), as TUIs such as Claude Code do.
+local TRACK = "printf '\\033[?1000h\\033[?1006h'; "
+
+---Wait for `needle` in the terminal and click it with `key` (e.g. "<C-LeftMouse>").
+---@param needle string
+---@param key? string default "<C-LeftMouse>"
+---@param offset? integer cells after the start of `needle`
+---@param rest? string keys sent after the press at the same place, e.g. "<C-LeftDrag>"
+local function click(needle, key, offset, rest)
+  local pos = child.lua_get(
+    [[(function(needle, offset)
+      local row
+      wait(function()
+        row = vim.iter(ipairs(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false))):find(function(_, line)
+          return line:find(needle, 1, true) ~= nil
+        end)
+        return row ~= nil
+      end)
+      assert(row, "not in the terminal: " .. needle)
+      local col = vim.api.nvim_buf_get_lines(s.buf, row - 1, row, false)[1]:find(needle, 1, true)
+      local pos = vim.fn.screenpos(s:window(), row, col)
+      return { pos.row - 1, pos.col - 1 + offset }
+    end)(...)]],
+    { needle, offset or 0 }
+  )
+  -- A click lands in a window only once the screen shows it: until then it goes to the
+  -- window below (a new floating terminal), which a slow runner can be clicking. Probe
+  -- with a button no test uses until a probe lands in the terminal's window.
+  child.lua([[
+    _G.probed = nil
+    vim.keymap.set({ "t", "n" }, "<X1Mouse>", function()
+      _G.probed = vim.fn.getmousepos().winid
+    end, { buffer = s.buf })
+  ]])
+  local landed = false
+  for _ = 1, 100 do
+    child.api.nvim_input(("<X1Mouse><%d,%d>"):format(pos[2], pos[1]))
+    if child.lua_get("wait(function() return _G.probed ~= nil end, 100) and _G.probed == s:window()") then
+      landed = true
+      break
+    end
+    child.lua("_G.probed = nil; vim.wait(20)")
+  end
+  child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf })")
+  eq({ needle, landed }, { needle, true })
+  local keys = vim.iter({ key or "<C-LeftMouse>", rest and vim.split(rest, " ") or nil }):flatten():totable()
+  for _, k in ipairs(keys) do
+    child.api.nvim_input(("%s<%d,%d>"):format(k, pos[2], pos[1]))
+  end
+  -- Time for a click that should do nothing to do something; others are waited for.
+  vim.uv.sleep(50)
+end
+
+-- Enter Terminal mode in the agent's terminal.
+local function terminal_mode()
+  child.lua("vim.api.nvim_set_current_win(s:window()); vim.cmd.startinsert()")
+  eq(child.lua_get("wait(function() return vim.api.nvim_get_mode().mode == 't' end)"), true)
+end
+
+-- Wait for the click to open a file: the current buffer is no longer a terminal.
+local function opened()
+  eq(child.lua_get("wait(function() return vim.bo.buftype ~= 'terminal' end)"), true)
+end
+
+---The mouse reports the job read: terminal echo of SGR sequences, e.g. `^[[<0;3;1M`.
+local function reports()
+  return child.lua_get([[vim.iter(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false))
+    :filter(function(line) return line:find("^[[<", 1, true) ~= nil end)
+    :totable()]])
+end
+
+T["mouse"] = MiniTest.new_set({ hooks = { pre_case = start, post_once = child.stop } })
+
+T["mouse"]["Ctrl+click in Terminal mode opens the file at the line"] = function()
+  agent("printf 'see lua/duet/init.lua:10 now\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  terminal_mode()
+  click("init.lua", nil, 3)
+  opened()
+  local at = child.lua_get("where()")
+  eq(rel(at.name), "lua/duet/init.lua")
+  eq({ at.line, at.terminal }, { 10, false })
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "n")
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["mouse"]["Ctrl+click opens a link while the job tracks the mouse"] = function()
+  agent(TRACK .. "printf 'plain text\\na.lua:1:1\\n'")
+  terminal_mode()
+  click("plain", "<LeftMouse>")
+  eq(
+    child.lua_get(
+      "wait(function() return #vim.fn.getbufline(s.buf, 1, '$') > 0 and vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('[[<0;', 1, true) ~= nil end)"
+    ),
+    true
+  )
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
+  click("a.lua")
+  opened()
+  eq({ rel(child.lua_get("where().name")), child.lua_get("where().line") }, { "a.lua", 1 })
+  -- The job got the plain click only: press and release.
+  eq(#reports(), 1)
+  eq(reports()[1]:find("[[<16;", 1, true), nil)
+end
+
+T["mouse"]["Ctrl+click in Normal mode opens the file"] = function()
+  agent("printf 'lua/duet/init.lua:12:3\\n'")
+  child.lua("vim.api.nvim_set_current_win(s:window())")
+  click("lua/duet")
+  opened()
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line, at.col }, { "lua/duet/init.lua", 12, 3 })
+end
+
+T["mouse"]["Ctrl+click does nothing where there is no link"] = MiniTest.new_set({
+  parametrize = { { "nothing here" }, { "missing/nope.lua:3" }, { "past the end" } },
+})
+
+T["mouse"]["Ctrl+click does nothing where there is no link"]["on %s"] = function(text)
+  agent(TRACK .. ("printf '%s\\n'"):format(text))
+  terminal_mode()
+  local win = child.lua_get("vim.api.nvim_get_current_win()")
+  click(text, nil, text == "past the end" and #text + 5 or 2, "<C-LeftDrag> <C-LeftRelease>")
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), win)
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.v.errmsg"), "")
+  eq(reports(), {})
+end
+
+T["mouse"]["a Ctrl+drag on text without a link keeps Terminal mode"] = function()
+  agent("printf 'nothing here\\n'")
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftDrag> <C-LeftRelease>")
+  eq(child.lua_get("{ vim.api.nvim_get_mode().mode, where().terminal }"), { "t", true })
+end
+
+T["mouse"]["a click kept for itself ends with its release, with or without Ctrl"] = function()
+  agent(TRACK .. "printf 'nothing here\\n'")
+  child.o.mousetime = 1 -- the next click is not a double-click
+  terminal_mode()
+  -- CTRL let go before the button: the release comes without it.
+  click("nothing", nil, 2, "<C-LeftDrag> <LeftRelease>")
+  eq(reports(), {})
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
+  -- The next plain click goes to the agent whole.
+  click("here", "<LeftMouse>", 0, "<LeftRelease>")
+  eq(
+    child.lua_get(
+      "wait(function() return vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('[[<0;', 1, true) ~= nil and vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('m', 1, true) ~= nil end)"
+    ),
+    true
+  )
+  eq(child.lua_get("vim.fn.maparg('<LeftRelease>', 't')"), "")
+end
+
+T["mouse"]["a release mapped in terminal.keys keeps its action"] = function()
+  agent("printf 'nothing here\\n'", { terminal = { keys = { ["<C-LeftRelease>"] = "hide" } } })
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftRelease>")
+  eq(child.lua_get("wait(function() return not s:is_visible() end)"), true)
+end
+
+T["mouse"]["Ctrl+click on the number column is not a click on the text"] = function()
+  agent("printf 'a.lua:1\\n'")
+  child.lua("vim.api.nvim_set_current_win(s:window()); vim.wo.number = true; vim.wo.signcolumn = 'yes'")
+  click("a.lua", nil, -3)
+  eq(child.lua_get("where().terminal"), true)
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["mouse"]["Ctrl+click follows an OSC 8 hyperlink"] = function()
+  agent(osc8("lua/duet/init.lua#L5", "Open me", "", " now"))
+  child.lua("cursor_on('Open me')")
+  require_osc8()
+  terminal_mode()
+  click("Open me", nil, 5)
+  opened()
+  local at = child.lua_get("where()")
+  eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 5 })
+end
+
+T["mouse"]["Ctrl+click hides a floating terminal"] = function()
+  agent("printf 'a.lua:1\\n'", { terminal = { layout = "float" } })
+  terminal_mode()
+  click("a.lua")
+  opened()
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("s:is_visible()"), false)
+end
+
+T["mouse"]["a link that fails to open keeps Terminal mode"] = function()
+  agent("printf 'a.lua:1\n'", { terminal = { layout = "float" } })
+  child.lua("s.hide = function() return nil, 'cannot hide' end")
+  terminal_mode()
+  click("a.lua")
+  eq(child.lua_get("wait(function() return #_G.notes > 0 end)"), true)
+  eq(child.lua_get("_G.notes[1].msg"), "[duet] links: cannot open 'a.lua': cannot hide")
+  eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  eq(child.lua_get("wait(function() return vim.api.nvim_get_mode().mode == 't' end)"), true)
+end
+
+T["mouse"]["Ctrl+click on another window does what it does without duet"] = function()
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  terminal_mode()
+  local pos = child.lua_get("vim.fn.win_screenpos(...)", { code })
+  child.api.nvim_input(("<C-LeftMouse><%d,%d>"):format(pos[2], pos[1]))
+  opened()
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+end
+
+T["mouse"]["the click can be rebound"] = function()
+  agent(TRACK .. "printf 'a.lua:1\\n'", {
+    terminal = { keys = { ["<C-LeftMouse>"] = false, ["<M-LeftMouse>"] = "open_link_mouse" } },
+  })
+  child.o.mousetime = 1 -- the second click is not a double-click
+  terminal_mode()
+  click("a.lua")
+  -- Not mapped any more: the job gets the click, with Ctrl (16).
+  eq(
+    child.lua_get(
+      "wait(function() return vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('[[<16;', 1, true) ~= nil end)"
+    ),
+    true
+  )
+  eq(child.lua_get("where().terminal"), true)
+  click("a.lua", "<M-LeftMouse>")
+  opened()
+  eq(rel(child.lua_get("where().name")), "a.lua")
+end
+
+T["mouse"]["the click can be turned off"] = function()
+  agent("printf 'a.lua:1\\n'", { terminal = { keys = { ["<C-LeftMouse>"] = false } } })
+  local maps = child.lua_get([[vim.api.nvim_buf_call(s.buf, function()
+    return { vim.fn.maparg("<C-LeftMouse>", "t"), vim.fn.maparg("<C-LeftMouse>", "n") }
+  end)]])
+  eq(maps, { "", "" })
+end
 
 T["open()"] = MiniTest.new_set({ hooks = { pre_case = start, post_once = child.stop } })
 

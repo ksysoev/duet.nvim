@@ -914,7 +914,9 @@ local function on_exit(self, code)
   end
 end
 
--- Normal-mode key actions on links (see duet.links), with their descriptions.
+-- Key actions on links (see duet.links), with their descriptions and modes (default:
+-- Normal mode).
+---@type table<string, { desc: string, fn: fun(lhs: string), modes?: string[] }>
 local LINK_ACTIONS = {
   open_link = {
     desc = "duet: open the file link under the cursor",
@@ -923,6 +925,15 @@ local LINK_ACTIONS = {
       -- built-in action fails in a terminal (gf) or would surprise.
       local enter = vim.keycode(lhs) == vim.keycode("<CR>")
       require("duet.links").follow({ fallback = enter and lhs or nil })
+    end,
+  },
+  open_link_mouse = {
+    desc = "duet: open the file link clicked",
+    -- A Terminal-mode mapping gets the click before the agent, even one that tracks the
+    -- mouse, so links open without leaving Terminal mode first.
+    modes = { "t", "n" },
+    fn = function(lhs)
+      require("duet.links").click(lhs)
     end,
   },
   next_link = {
@@ -949,9 +960,10 @@ local function set_keymaps(self)
         self:hide()
       end, { buffer = self.buf, desc = "duet: hide the agent terminal" })
     elseif LINK_ACTIONS[action] then
-      vim.keymap.set("n", lhs, function()
-        LINK_ACTIONS[action].fn(lhs)
-      end, { buffer = self.buf, desc = LINK_ACTIONS[action].desc })
+      local spec = LINK_ACTIONS[action]
+      vim.keymap.set(spec.modes or "n", lhs, function()
+        spec.fn(lhs)
+      end, { buffer = self.buf, desc = spec.desc })
     end
   end
 end

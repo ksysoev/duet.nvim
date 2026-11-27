@@ -80,5 +80,8 @@ M.register("duet", check_core)
 M.register("agents", function()
   require("duet.agents").health()
 end)
+M.register("links", function()
+  require("duet.links").health()
+end)
 
 return M
