@@ -646,8 +646,9 @@ running: your keys could end up in the text, or be submitted with it.
 The text is typed as it is, so the agent reads it as if you had typed it:
 for Claude Code, text starting with `/` runs that command, and text
 starting with `!` runs in its shell mode. Typing `/` opens Claude Code's
-command menu, and <Enter> runs the entry it highlights: send a command's
-full name (`/clear`, `/compact keep the tests`), since a prefix such as
+command menu, and <Enter> runs the entry it highlights rather than exactly
+what was typed. Send a command's full name (`/clear`, `/compact keep the
+tests`): Claude Code highlights an exact match, while a prefix such as
 `/co` runs the first match (`/copy`).
 
 Each send waits until the agent is ready for input: its input prompt is on

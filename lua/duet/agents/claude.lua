@@ -188,25 +188,50 @@ local function box_prompt(lines, close)
   return nil
 end
 
+---Whether `line` can be a row of the slash-command menu below its selected entry: another
+---entry, a wrapped description, or a blank line. All of them are indented.
+---@param line string
+---@return boolean
+local function is_menu_row(line)
+  return line:match("^%s") ~= nil or line == ""
+end
+
+---If line `i` is the selected entry of the slash-command menu, the prompt line of the
+---input box the menu belongs to. The entry must hang below the box's closing rule (other
+---entries or a notice may come between), the box must hold a slash command, and only
+---menu rows may follow the entry, so a menu left above newer output doesn't count.
+---@param lines string[]
+---@param i integer
+---@return integer|nil
+local function menu_prompt(lines, i)
+  if not is_menu_choice(lines[i]) then
+    return nil
+  end
+  for j = i + 1, #lines do
+    if not is_menu_row(lines[j]) then
+      return nil
+    end
+  end
+  for j = i - 1, 2, -1 do
+    if lines[j]:find("❯", 1, true) then
+      return nil
+    elseif is_rule(lines[j]) then
+      local prompt = box_prompt(lines, j)
+      return prompt and vim.startswith(lines[prompt], "❯ /") and prompt or nil
+    end
+  end
+  return nil
+end
+
 ---The index of the last line that marks a choice with `❯`, or 1 if none does. Typing `/`
 ---opens the slash-command menu below the input box, and its selected entry is marked
----like a dialog's choice. That entry counts as the input box's prompt instead, when it
----hangs below the box's closing rule (other menu entries or a notice may come between).
+---like a dialog's choice: the box's prompt counts instead (see menu_prompt).
 ---@param lines string[]
 ---@return integer
 local function last_marker(lines)
   for i = #lines, 1, -1 do
     if lines[i]:find("❯", 1, true) then
-      if is_menu_choice(lines[i]) then
-        for j = i - 1, 2, -1 do
-          if lines[j]:find("❯", 1, true) then
-            break
-          elseif is_rule(lines[j]) then
-            return box_prompt(lines, j) or i
-          end
-        end
-      end
-      return i
+      return menu_prompt(lines, i) or i
     end
   end
   return 1
