@@ -1112,12 +1112,19 @@ local function keep_multiclick(lhs)
   end
   local in_press = false -- between a press that was dropped and its release
   local last, at = first.count, vim.uv.hrtime() -- the count of the last press, and when
-  ---Whether press `k` goes on from the last one: Neovim counts up to 4, then from 1 again.
+  local pos = vim.fn.getmousepos()
+  ---Whether press `k` goes on from the last one: Neovim counts up to 4, then from 1 again
+  ---for a press at the same place soon after, as for a new click anywhere.
   local function next_press(k)
     if k.count == last + 1 then
       return true
     end
-    return last == 4 and k.count == 1 and (vim.uv.hrtime() - at) / 1e6 <= vim.o.mousetime
+    local now = vim.fn.getmousepos()
+    return last == 4
+      and k.count == 1
+      and (vim.uv.hrtime() - at) / 1e6 <= vim.o.mousetime
+      and now.screenrow == pos.screenrow
+      and now.screencol == pos.screencol
   end
   vim.on_key(function(key, typed)
     if typed == "" then
@@ -1164,27 +1171,28 @@ local function register_prefix()
   return vim.v.register ~= default and ('"' .. vim.v.register) or ""
 end
 
-local REPLAY = "<Plug>(duet-click)"
+local RESTORE = "<Plug>(duet-click-restore)"
+local RESTORE_MODES = { "n", "x", "s", "o", "i", "c", "t" }
 
----Keys to feed for `map`, a mapping of `code`, and the mapping to make for them: a copy
----of `map` on `<Plug>(duet-click)`, so it runs as Neovim runs it, in its script and with
----its flags. The copy is global: what is fed before it may change the buffer. Neovim does not map {lhs} again at the start of its own {rhs}: that part is
----the built-in action, fed without mappings.
----@param map table from nvim_get_keymap()
----@param code string raw key codes of the click
----@return string first keys fed without mappings, or ""
----@return table|nil copy the mapping to make on `<Plug>(duet-click)`, if any
-local function replay_plan(map, code)
-  map = vim.deepcopy(map)
-  local first = ""
-  if map.noremap ~= 1 and map.expr ~= 1 and map.rhs and vim.startswith(vim.keycode(map.rhs), code) then
-    first, map.rhs = code, vim.fn.keytrans(vim.keycode(map.rhs):sub(#code + 1))
+-- duet's own mapping that replay() swapped out for yours, until restore() puts it back.
+---@type { buf: integer, mode: string, map: table }|nil
+local swapped
+
+---Put back duet's mapping that replay() swapped out, if it still is.
+local function restore()
+  local swap = swapped
+  if not swap then
+    return
   end
-  if not map.callback and (map.rhs or "") == "" then
-    return first, nil -- e.g. <Nop>
+  swapped = nil
+  for _, mode in ipairs(RESTORE_MODES) do
+    pcall(vim.keymap.del, mode, RESTORE)
   end
-  map.lhs, map.lhsraw, map.lhsrawalt, map.buffer = REPLAY, vim.keycode(REPLAY), nil, 0
-  return first, map
+  if vim.api.nvim_buf_is_valid(swap.buf) then
+    vim.api.nvim_buf_call(swap.buf, function()
+      vim.fn.mapset(swap.mode, false, swap.map)
+    end)
+  end
 end
 
 ---Do with a click `lhs` that is not on a duet terminal's text what Neovim does without
@@ -1192,8 +1200,14 @@ end
 ---register and count typed before it. In Terminal mode with no Terminal-mode mapping,
 ---Neovim leaves Terminal mode and reads the click again in Normal mode, where your
 ---mapping, or duet's own, gets it.
+---
+---Your mapping runs as Neovim runs it, in its script and with its flags: for one key,
+---duet's buffer-local mapping is swapped for a copy of yours and the click is fed again.
+---`<Plug>(duet-click-restore)`, fed after it, swaps duet's back once your mapping has
+---been read: the keys a mapping gives go in front of it.
 ---@param lhs string the key the action is mapped to
 local function replay(lhs)
+  restore()
   local code = vim.keycode(lhs)
   local terminal_mode = vim.api.nvim_get_mode().mode == "t"
   local mode = terminal_mode and "t" or "n"
@@ -1203,27 +1217,27 @@ local function replay(lhs)
     vim.api.nvim_feedkeys(vim.keycode("<C-\\><C-N>"), "ni", false)
     return
   end
-  local first, copy = code, nil
-  if map then
-    first, copy = replay_plan(map, code)
-  end
   -- Fed ahead of the release or drag that may already be waiting: each feed with "i"
   -- goes in front of the one before, so they are fed last key first.
-  if copy then
-    vim.fn.mapset(mode, false, copy)
-    vim.api.nvim_feedkeys(vim.keycode(REPLAY), "mi", false)
-    -- Scheduled work runs once the keys fed are read.
-    vim.schedule(function()
-      pcall(vim.keymap.del, mode, REPLAY)
-    end)
-  end
-  if first ~= "" then
-    vim.api.nvim_feedkeys(first, "ni", false)
-  end
   local prefix = terminal_mode and "" or register_prefix() .. (vim.v.count > 0 and vim.v.count or "")
-  if prefix ~= "" and (copy or first ~= "") then
+  if not map then
+    vim.api.nvim_feedkeys(prefix .. code, "ni", false)
+    return
+  end
+  swapped = { buf = vim.api.nvim_get_current_buf(), mode = mode, map = vim.fn.maparg(lhs, mode, false, true) }
+  local copy = vim.deepcopy(map)
+  -- Used at once: a longer mapping of yours that starts with the click would wait for
+  -- more keys, and duet's mapping could be back by then.
+  copy.buffer, copy.nowait, copy.mode, copy.mode_bits = 1, 1, mode, nil
+  vim.fn.mapset(mode, false, copy)
+  vim.keymap.set(RESTORE_MODES, RESTORE, restore, { desc = "duet: put back the CTRL-click mapping" })
+  vim.api.nvim_feedkeys(vim.keycode(RESTORE), "mi", false)
+  vim.api.nvim_feedkeys(code, "mi", false)
+  if prefix ~= "" then
     vim.api.nvim_feedkeys(prefix, "ni", false)
   end
+  -- An error in your mapping drops the keys after it, RESTORE too.
+  vim.schedule(restore)
 end
 
 ---Open the link under the mouse (the `"open_link_mouse"` key action, mapped to a click

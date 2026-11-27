@@ -1446,6 +1446,28 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"] = MiniTest.new_
       { count = 0, code = true },
     },
     {
+      "a remapped expression whose keys start with the click",
+      "n",
+      [[vim.cmd("nmap <expr> <C-LeftMouse> '<C-LeftMouse><Cmd>lua _G.hit = { count = 0 }<CR>'")]],
+      "<C-LeftMouse>",
+      { count = 0, code = true, name = "a.lua" },
+    },
+    {
+      "Terminal-mode keys that start with the click",
+      "t",
+      -- Neovim's click leaves Terminal mode; the rest runs in Normal mode.
+      [[vim.cmd("tmap <C-LeftMouse> <C-LeftMouse><Cmd>lua _G.hit = { mode = vim.api.nvim_get_mode().mode, count = 0 }<CR>")]],
+      "<C-LeftMouse>",
+      { mode = "n", count = 0, code = true, name = "a.lua" },
+    },
+    {
+      "a mapping for all modes",
+      "n",
+      [[vim.cmd("map <C-LeftMouse> <Cmd>lua _G.hit = { count = 0 }<CR>")]],
+      "<C-LeftMouse>",
+      { count = 0, code = false },
+    },
+    {
       "an expression",
       "t",
       [[vim.keymap.set("n", "<C-LeftMouse>", function()
@@ -1487,6 +1509,16 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"]["%s"] = functio
     eq(rel(child.lua_get("where().name")), want.name)
   end
   eq(child.lua_get("vim.v.errmsg"), "")
+  -- duet's own mapping is back, and nothing else is left in the terminal.
+  local maps = child.lua_get([[vim.api.nvim_buf_call(s.buf, function()
+    return {
+      vim.fn.maparg("<C-LeftMouse>", "n", false, true).desc,
+      vim.fn.maparg("<C-LeftMouse>", "t", false, true).desc,
+      vim.fn.maparg("<C-LeftMouse>", "x", false, true).buffer or 0,
+      vim.fn.maparg("<Plug>(duet-click-restore)", "n"),
+    }
+  end)]])
+  eq(maps, { "duet: open the file link clicked", "duet: open the file link clicked", 0, "" })
 end
 
 T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"] = MiniTest.new_set({
@@ -1527,6 +1559,23 @@ T["mouse"]["a double Ctrl+click on text without a link does nothing"] = function
   vim.uv.sleep(100)
   eq(reports(), {})
   eq(child.lua_get("{ vim.api.nvim_get_mode().mode, vim.v.errmsg }"), { "t", "" })
+end
+
+T["mouse"]["a Ctrl+click elsewhere right after a quadruple click is a new click"] = function()
+  -- Neovim counts it as one, as a fifth press at the same place would be. In the window
+  -- the link opened in, duet does not map it: Neovim's CTRL-click jumps to tag "a".
+  child.fn.writefile({ "a\tb.lua\t1" }, root .. "/tags")
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  terminal_mode()
+  local rest = { "<C-LeftRelease>" }
+  for _ = 2, 4 do
+    vim.list_extend(rest, { "<C-LeftMouse>", "<C-LeftRelease>" })
+  end
+  click("a.lua", nil, 0, table.concat(rest, " "))
+  opened()
+  click_code(code, "<C-LeftMouse>")
+  eq(child.lua_get("wait(function() return vim.api.nvim_buf_get_name(0):find('b.lua', 1, true) ~= nil end)"), true)
 end
 
 T["mouse"]["a double click mapped in terminal.keys keeps its own release"] = function()
