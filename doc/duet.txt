@@ -216,8 +216,10 @@ terminal ~
         - `"open_link"`: open the file link under the cursor (normal
           mode). See |duet-links|. Mapped to <CR>, it moves the cursor down
           as usual where there is no reference to open.
-        - `"open_link_mouse"`: open the file link clicked, for a mouse
-          key such as `<C-LeftMouse>` (terminal and normal mode). See
+        - `"open_link_mouse"`: open the file link clicked (terminal and
+          normal mode). Bind it to a mouse key such as `<C-LeftMouse>`:
+          it reads where the mouse is, and a key such as `gf` would no
+          longer reach the agent in terminal mode. See
           |duet-links-mouse|.
         - `"next_link"`, `"prev_link"`: move to the next or previous file
           link in the visible output; a count repeats it (normal mode).
@@ -374,7 +376,7 @@ Run `:checkhealth duet` to check:
 - that `git` is on your PATH (needed for reviews),
 - your configuration (invalid values and unknown options),
 - the location of the log file,
-- that 'mouse' is not empty when a key opens links with a click
+- that 'mouse' lets the terminal get clicks when a key opens links with one
   (|duet-links-mouse|),
 - for the default agent and every agent under |duet-config-agents|: that
   its command can be found (on your PATH, or at the path you set) and
@@ -837,8 +839,9 @@ status line, it does what it does without duet. Only a click in a window
 showing the agent's terminal while that terminal is the current buffer is
 seen: from another window, it is Neovim's own CTRL-click.
 
-Neovim gets clicks only when 'mouse' is not empty (the default is "nvi");
-|duet-health| warns when it is. The click must also get past the terminal
+The terminal gets clicks only when 'mouse' has the `n` or `a` flag (the
+default "nvi" does): Neovim reads them in |Terminal-mode| as in normal mode.
+|duet-health| warns when it has neither. The click must also get past the terminal
 emulator Neovim runs in, and many keep some modified clicks for themselves.
 Map another key with the `"open_link_mouse"` action if yours does: >lua
     terminal = { keys = {

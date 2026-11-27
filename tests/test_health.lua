@@ -48,8 +48,15 @@ T["reports opening links with a click"] = MiniTest.new_set({
       "the mouse off",
       "",
       "{}",
-      "WARNING 'mouse' is empty, so Neovim gets no mouse clicks and <C-LeftMouse> cannot open links",
+      "WARNING 'mouse' is \"\", so the terminal gets no mouse clicks and <C-LeftMouse> cannot open links",
     },
+    {
+      "the mouse only in Insert mode",
+      "i",
+      "{}",
+      "WARNING 'mouse' is \"i\", so the terminal gets no mouse clicks and <C-LeftMouse> cannot open links",
+    },
+    { "the mouse in Normal mode", "n", "{}", "OK <C-LeftMouse> opens links ('mouse' is \"n\")" },
     {
       "the click turned off",
       "",
@@ -65,7 +72,7 @@ T["reports opening links with a click"]["with %s"] = function(_, mouse, opts, ex
   local report = checkhealth()
   eq({ expected, has(report, expected) }, { expected, true })
   -- Without a key to click, an empty 'mouse' is no problem.
-  eq(has(report, "WARNING 'mouse'"), mouse == "" and opts == "{}")
+  eq(has(report, "WARNING 'mouse'"), not mouse:find("[an]") and opts == "{}")
 end
 
 T["a failing check does not hide the others"] = function()

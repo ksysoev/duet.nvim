@@ -995,17 +995,26 @@ end
 function M.click(lhs)
   local link, win = M.at_mouse()
   if not win then
-    vim.api.nvim_feedkeys(vim.keycode(lhs), "n", false)
+    -- Ahead of the release or drag that may already be waiting.
+    vim.api.nvim_feedkeys(vim.keycode(lhs), "ni", false)
     return
   end
   if not link then
     return
   end
-  if win ~= vim.api.nvim_get_current_win() then
+  local from, terminal_mode = vim.api.nvim_get_current_win(), vim.api.nvim_get_mode().mode == "t"
+  if win ~= from then
     vim.api.nvim_set_current_win(win)
   end
   local ok, err = M.open(link)
   if not ok then
+    -- open() restored the clicked window; go back to where the click came from.
+    if vim.api.nvim_win_is_valid(from) and vim.api.nvim_get_current_win() ~= from then
+      vim.api.nvim_set_current_win(from)
+    end
+    if terminal_mode and vim.bo.buftype == "terminal" then
+      vim.cmd.startinsert()
+    end
     require("duet.util").notify(err or "links: nothing to open", vim.log.levels.WARN)
   end
 end
@@ -1137,7 +1146,8 @@ end
 -- Health ---------------------------------------------------------------------
 
 ---Report on opening links with a mouse click (for |duet-health|): the keys bound to
----`"open_link_mouse"`, and whether 'mouse' lets the click reach Neovim.
+---`"open_link_mouse"`, and whether 'mouse' lets the click reach Neovim: Terminal and
+---Normal mode get clicks with its `n` flag (or `a`).
 function M.health()
   local keys = {}
   for lhs, action in pairs(require("duet.config").get().terminal.keys) do
@@ -1151,10 +1161,11 @@ function M.health()
   end
   table.sort(keys)
   local names = table.concat(keys, ", ")
-  if vim.o.mouse == "" then
+  local mouse = vim.o.mouse
+  if not mouse:find("[an]") then
     vim.health.warn(
-      ("'mouse' is empty, so Neovim gets no mouse clicks and %s cannot open links"):format(names),
-      { "Enable the mouse, e.g. `vim.o.mouse = 'a'`" }
+      ("'mouse' is %q, so the terminal gets no mouse clicks and %s cannot open links"):format(mouse, names),
+      { "Enable the mouse in Normal mode, e.g. `vim.o.mouse = 'nvi'` (the default) or 'a'" }
     )
   else
     vim.health.ok(("%s opens links ('mouse' is %q)"):format(names, vim.o.mouse))
