@@ -41,6 +41,33 @@ T["reports config problems"]["%s"] = function(_, opts, expected)
   eq(has(checkhealth(), expected), true)
 end
 
+T["reports opening links with a click"] = MiniTest.new_set({
+  parametrize = {
+    { "the mouse on", "a", "{}", "OK <C-LeftMouse> opens links ('mouse' is \"a\")" },
+    {
+      "the mouse off",
+      "",
+      "{}",
+      "WARNING 'mouse' is empty, so Neovim gets no mouse clicks and <C-LeftMouse> cannot open links",
+    },
+    {
+      "the click turned off",
+      "",
+      "{ terminal = { keys = { ['<C-LeftMouse>'] = false } } }",
+      "no key in terminal.keys opens a link with a mouse click",
+    },
+  },
+})
+
+T["reports opening links with a click"]["with %s"] = function(_, mouse, opts, expected)
+  child.o.mouse = mouse
+  child.lua("require('duet').setup(" .. opts .. ")")
+  local report = checkhealth()
+  eq({ expected, has(report, expected) }, { expected, true })
+  -- Without a key to click, an empty 'mouse' is no problem.
+  eq(has(report, "WARNING 'mouse'"), mouse == "" and opts == "{}")
+end
+
 T["a failing check does not hide the others"] = function()
   child.lua([[
     local health = require("duet.health")

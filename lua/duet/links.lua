@@ -657,15 +657,14 @@ local function osc8_at(buf, row, col, cwd)
   return nil
 end
 
----The link under the cursor in `win`, resolved. An OSC 8 hyperlink there comes first.
----@param win? integer default: the current window
+---The link at a position in `win`, resolved. An OSC 8 hyperlink there comes first.
+---@param win integer
+---@param row integer 1-based buffer row
+---@param col integer 1-based byte column
 ---@return duet.Link|nil link
 ---@return string|nil err a link that does not resolve, or no link at all
-function M.at_cursor(win)
-  win = win or vim.api.nvim_get_current_win()
+function M.at(win, row, col)
   local buf = vim.api.nvim_win_get_buf(win)
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local row, col = cursor[1], cursor[2] + 1
   local cwd = M.cwd(buf)
   local osc8 = osc8_at(buf, row, col, cwd)
   if osc8 then
@@ -690,6 +689,32 @@ function M.at_cursor(win)
     end
   end
   return nil, NO_LINK
+end
+
+---The link under the cursor in `win`, resolved. An OSC 8 hyperlink there comes first.
+---@param win? integer default: the current window
+---@return duet.Link|nil link
+---@return string|nil err a link that does not resolve, or no link at all
+function M.at_cursor(win)
+  win = win or vim.api.nvim_get_current_win()
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  return M.at(win, cursor[1], cursor[2] + 1)
+end
+
+---The link under the mouse, from |getmousepos()| in a mapping for a click, resolved. Only
+---text in a duet terminal counts.
+---@return duet.Link|nil link
+---@return integer|nil win the window clicked, when the click was on a duet terminal's text
+function M.at_mouse()
+  local pos = vim.fn.getmousepos()
+  local win = pos.winid
+  if win == 0 or pos.line == 0 or not vim.api.nvim_win_is_valid(win) then
+    return nil, nil -- the command line, a status line or a separator
+  end
+  if vim.b[vim.api.nvim_win_get_buf(win)].duet_session == nil then
+    return nil, nil
+  end
+  return (M.at(win, pos.line, pos.column)), win
 end
 
 ---The first and last buffer rows shown in `win`.
@@ -962,6 +987,29 @@ function M.follow(opts)
   end
 end
 
+---Open the link under the mouse (the `"open_link_mouse"` key action, mapped to a click
+---in Terminal and Normal mode). A click on a duet terminal's text that is not a link does
+---nothing. A click anywhere else, such as another window or a status line, does what
+---`lhs` does without the mapping.
+---@param lhs string the key the action is mapped to, e.g. `"<C-LeftMouse>"`
+function M.click(lhs)
+  local link, win = M.at_mouse()
+  if not win then
+    vim.api.nvim_feedkeys(vim.keycode(lhs), "n", false)
+    return
+  end
+  if not link then
+    return
+  end
+  if win ~= vim.api.nvim_get_current_win() then
+    vim.api.nvim_set_current_win(win)
+  end
+  local ok, err = M.open(link)
+  if not ok then
+    require("duet.util").notify(err or "links: nothing to open", vim.log.levels.WARN)
+  end
+end
+
 ---Move the cursor to the next (`dir` 1) or previous (`dir` -1) link in the visible
 ---lines, `count` times (the `"next_link"` and `"prev_link"` key actions).
 ---@param dir 1|-1
@@ -1084,6 +1132,33 @@ function M.attach_highlighter(buf)
     end,
   })
   schedule()
+end
+
+-- Health ---------------------------------------------------------------------
+
+---Report on opening links with a mouse click (for |duet-health|): the keys bound to
+---`"open_link_mouse"`, and whether 'mouse' lets the click reach Neovim.
+function M.health()
+  local keys = {}
+  for lhs, action in pairs(require("duet.config").get().terminal.keys) do
+    if action == "open_link_mouse" then
+      keys[#keys + 1] = lhs
+    end
+  end
+  if #keys == 0 then
+    vim.health.info("no key in terminal.keys opens a link with a mouse click")
+    return
+  end
+  table.sort(keys)
+  local names = table.concat(keys, ", ")
+  if vim.o.mouse == "" then
+    vim.health.warn(
+      ("'mouse' is empty, so Neovim gets no mouse clicks and %s cannot open links"):format(names),
+      { "Enable the mouse, e.g. `vim.o.mouse = 'a'`" }
+    )
+  else
+    vim.health.ok(("%s opens links ('mouse' is %q)"):format(names, vim.o.mouse))
+  end
 end
 
 -- OSC 8 ----------------------------------------------------------------------

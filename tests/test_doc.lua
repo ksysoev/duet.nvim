@@ -45,6 +45,8 @@ T["helptags build without errors"] = function()
     "duet.context.register()",
     "duet-links",
     "duet-config-links",
+    "duet-links-mouse",
+    "duet.links.at()",
     "duet-config-links-replace_filetypes",
     "duet.links.parse()",
     "duet.links.resolve()",
