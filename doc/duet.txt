@@ -805,17 +805,17 @@ A directory opens in whatever handles directories (|netrw|, a file
 explorer plugin).
 
 Where the file opens: in the previous window if it shows a file, else in the
-first window in the tab that does. A floating terminal is hidden first, so
-the file isn't behind it. With no such window, the file replaces a start
-screen, as |:edit| would: a window whose filetype is in
+first window in the tab that does. A floating terminal is hidden first, so the
+file isn't behind it. With no such window, the file replaces a start screen,
+as |:edit| would: a window whose filetype is in
 |duet-config-links-replace_filetypes| (the snacks, alpha, dashboard-nvim,
 mini.starter and startify dashboards by default), unless the buffer is
-modified, the window is floating or sets 'winfixbuf'. The current window
-is preferred, then the previous one, then the widest. Sidebars such as file
-explorers have other filetypes and are never used. With no such window either, a split opens on
-the other side of the terminal. The cursor goes to the line (and column),
-the view is centered, and the line or range flashes with |hl-DuetLinkFlash|.
-The jump is added to the |jumplist|, so CTRL-O goes back.
+modified, the window is floating or sets 'winfixbuf'. The current window is
+preferred, then the previous one, then the widest. Sidebars such as file
+explorers have other filetypes and are never used. With no such window either,
+a split opens on the other side of the terminal. The cursor goes to the line
+(and column), the view is centered, and the line or range flashes with
+|hl-DuetLinkFlash|. The jump is added to the |jumplist|, so CTRL-O goes back.
 
 OSC 8 hyperlinks ~
 Programs can print a link whose target differs from its text, as OSC 8

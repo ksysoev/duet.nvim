@@ -742,7 +742,13 @@ local SPLIT_FROM = { right = "leftabove vnew", left = "rightbelow vnew", bottom 
 ---@field hidden? duet.Session the floating terminal it hid
 ---@field buf? integer the empty buffer the split opened with; a failed `:edit` may
 ---have named it
----@field replaced? { win: integer, buf: integer } the start screen the file was to replace
+---@field replaced? duet.links.Replaced the start screen the file was to replace
+
+---@class duet.links.Replaced
+---@field win integer its window
+---@field buf integer its buffer, which is often wiped when the window leaves it
+---@field bufs table<integer, true> the buffers that existed before, so the one a failed
+---`:edit` created can be told apart
 
 ---Whether a file may be opened in `win` in place of what it shows: a start screen (a
 ---filetype in `links.replace_filetypes`) that is not modified, in a window that is not
@@ -771,7 +777,12 @@ local function replaceable_window()
   if #filetypes == 0 then
     return nil
   end
-  for _, win in ipairs({ vim.api.nvim_get_current_win(), vim.fn.win_getid(vim.fn.winnr("#")) }) do
+  local candidates = { vim.api.nvim_get_current_win() }
+  local prev = vim.fn.winnr("#")
+  if prev ~= 0 then
+    table.insert(candidates, vim.fn.win_getid(prev))
+  end
+  for _, win in ipairs(candidates) do
     if is_replaceable(win, filetypes) then
       return win
     end
@@ -816,7 +827,11 @@ local function target_window()
   end
   local start_screen = replaceable_window()
   if start_screen then
-    undo.replaced = { win = start_screen, buf = vim.api.nvim_win_get_buf(start_screen) }
+    local bufs = {}
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      bufs[b] = true
+    end
+    undo.replaced = { win = start_screen, buf = vim.api.nvim_win_get_buf(start_screen), bufs = bufs }
     return start_screen, undo
   end
   vim.cmd(SPLIT_FROM[vim.w[cur].duet_layout] or "leftabove vnew")
@@ -835,16 +850,27 @@ local function restore_layout(undo)
   if buf and vim.api.nvim_buf_is_valid(buf) and not vim.bo[buf].modified and #vim.fn.win_findbuf(buf) == 0 then
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
-  -- A start screen that was left before `:edit` failed is shown again, unless it was
-  -- wiped on leaving (as most are).
   local replaced = undo.replaced
-  if
-    replaced
-    and vim.api.nvim_win_is_valid(replaced.win)
-    and vim.api.nvim_buf_is_valid(replaced.buf)
-    and vim.api.nvim_win_get_buf(replaced.win) ~= replaced.buf
-  then
-    pcall(vim.api.nvim_win_set_buf, replaced.win, replaced.buf)
+  if replaced and vim.api.nvim_win_is_valid(replaced.win) then
+    local shown = vim.api.nvim_win_get_buf(replaced.win)
+    if shown ~= replaced.buf then
+      -- The start screen comes back if it still exists. Most are wiped when left: the
+      -- window then gets an empty buffer, as after the start screen's own `:enew`.
+      if vim.api.nvim_buf_is_valid(replaced.buf) then
+        pcall(vim.api.nvim_win_set_buf, replaced.win, replaced.buf)
+      else
+        pcall(vim.api.nvim_win_call, replaced.win, vim.cmd.enew)
+      end
+      -- The buffer the failed `:edit` created goes; one the user had already stays.
+      if
+        not replaced.bufs[shown]
+        and vim.api.nvim_buf_is_valid(shown)
+        and not vim.bo[shown].modified
+        and #vim.fn.win_findbuf(shown) == 0
+      then
+        pcall(vim.api.nvim_buf_delete, shown, { force = true })
+      end
+    end
   end
   if undo.hidden then
     local win = undo.hidden:show()

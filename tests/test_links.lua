@@ -608,6 +608,8 @@ local function screen(filetype, split)
       if split then vim.cmd(split) end
       local buf = vim.api.nvim_create_buf(false, true)
       vim.api.nvim_win_set_buf(0, buf)
+      -- Drawn, as start screens are: `:edit` would reuse an empty, unnamed buffer.
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { filetype })
       vim.bo[buf].filetype = filetype
       return vim.api.nvim_get_current_win()
     end)(...)]],
@@ -705,8 +707,13 @@ T["terminal"]["of start screens as wide, the tallest is used"] = function()
   eq(child.lua_get("vim.api.nvim_get_current_win()"), tall)
 end
 
-T["terminal"]["a start screen comes back when the file fails to open"] = function()
+T["terminal"]["a file that fails to open in place of a start screen"] = MiniTest.new_set({
+  parametrize = { { "hide" }, { "wipe" } },
+})
+
+T["terminal"]["a file that fails to open in place of a start screen"]["with bufhidden=%s"] = function(bufhidden)
   local dashboard = screen("snacks_dashboard")
+  child.lua("vim.bo.bufhidden = ...", { bufhidden })
   local buf = child.lua_get("vim.api.nvim_get_current_buf()")
   agent("printf 'a.lua:1\\n'")
   child.lua([[vim.api.nvim_create_autocmd("BufReadCmd", {
@@ -715,7 +722,19 @@ T["terminal"]["a start screen comes back when the file fails to open"] = functio
   })]])
   child.lua("cursor_on('a.lua')")
   child.type_keys("gf")
-  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { dashboard }), buf)
+  local shown = child.lua_get("vim.api.nvim_win_get_buf(...)", { dashboard })
+  if bufhidden == "hide" then
+    -- The start screen comes back.
+    eq(shown, buf)
+  else
+    -- It is gone: the window shows an empty buffer, not the one that failed.
+    eq(child.lua_get("vim.api.nvim_buf_is_valid(...)", { buf }), false)
+    eq(
+      child.lua_get("(function(b) return { vim.api.nvim_buf_get_name(b), vim.bo[b].buftype } end)(...)", { shown }),
+      { "", "" }
+    )
+  end
+  eq(child.lua_get("vim.fn.bufexists(...)", { root .. "/a.lua" }), 0)
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
   eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
   eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
