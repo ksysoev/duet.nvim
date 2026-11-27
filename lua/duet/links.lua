@@ -1171,8 +1171,9 @@ local function register_prefix()
   return vim.v.register ~= default and ('"' .. vim.v.register) or ""
 end
 
-local RESTORE = "<Plug>(duet-click-restore)"
-local RESTORE_MODES = { "n", "x", "s", "o", "i", "c", "t" }
+local restore_ns = vim.api.nvim_create_namespace("duet.links.restore")
+-- The key a mapping with a Lua callback gives (K_SPECIAL, KS_EXTRA, KE_LUA).
+local K_LUA = "\128\253g"
 
 -- duet's own mapping that replay() swapped out for yours, until restore() puts it back.
 ---@type { buf: integer, mode: string, map: table }|nil
@@ -1185,9 +1186,7 @@ local function restore()
     return
   end
   swapped = nil
-  for _, mode in ipairs(RESTORE_MODES) do
-    pcall(vim.keymap.del, mode, RESTORE)
-  end
+  vim.on_key(nil, restore_ns)
   if vim.api.nvim_buf_is_valid(swap.buf) then
     vim.api.nvim_buf_call(swap.buf, function()
       vim.fn.mapset(swap.mode, false, swap.map)
@@ -1203,8 +1202,9 @@ end
 ---
 ---Your mapping runs as Neovim runs it, in its script and with its flags: for one key,
 ---duet's buffer-local mapping is swapped for a copy of yours and the click is fed again.
----`<Plug>(duet-click-restore)`, fed after it, swaps duet's back once your mapping has
----been read: the keys a mapping gives go in front of it.
+---duet's comes back with the first key your mapping gives, which |vim.on_key()| sees
+---once the mapping has been applied. No key is fed for that: a command of yours still
+---waiting for a key, such as `r`, would read it.
 ---@param lhs string the key the action is mapped to
 local function replay(lhs)
   restore()
@@ -1230,13 +1230,23 @@ local function replay(lhs)
   -- more keys, and duet's mapping could be back by then.
   copy.buffer, copy.nowait, copy.mode, copy.mode_bits = 1, 1, mode, nil
   vim.fn.mapset(mode, false, copy)
-  vim.keymap.set(RESTORE_MODES, RESTORE, restore, { desc = "duet: put back the CTRL-click mapping" })
-  vim.api.nvim_feedkeys(vim.keycode(RESTORE), "mi", false)
   vim.api.nvim_feedkeys(code, "mi", false)
   if prefix ~= "" then
     vim.api.nvim_feedkeys(prefix, "ni", false)
   end
-  -- An error in your mapping drops the keys after it, RESTORE too.
+  local before = #prefix -- keys read before the click: the register and count are ASCII
+  vim.on_key(function(key)
+    if before > 0 then
+      before = before - 1
+    elseif key == K_LUA then
+      -- Your Lua callback, still to run: removing its copy now would lose it.
+      vim.on_key(nil, restore_ns)
+    else
+      restore()
+    end
+  end, restore_ns)
+  -- A mapping that gives no key, such as <Nop>, or keys an error dropped: once the keys
+  -- fed are read.
   vim.schedule(restore)
 end
 

@@ -912,6 +912,9 @@ Known quirks:
   uses the mouse, so `<S-LeftMouse>` rarely reaches Neovim.
 - In tmux, clicks reach Neovim only with `set -g mouse on`; tmux passes the
   modifiers on.
+- Neovim counts clicks at the same place whatever the modifiers: a CTRL-click
+  right after a plain click there (within 'mousetime') is `<2-C-LeftMouse>`,
+  a different key. Map it too if you click to focus first.
 
 OSC 8 hyperlinks ~
 Programs can print a link whose target differs from its text, as OSC 8

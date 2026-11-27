@@ -1515,10 +1515,34 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"]["%s"] = functio
       vim.fn.maparg("<C-LeftMouse>", "n", false, true).desc,
       vim.fn.maparg("<C-LeftMouse>", "t", false, true).desc,
       vim.fn.maparg("<C-LeftMouse>", "x", false, true).buffer or 0,
-      vim.fn.maparg("<Plug>(duet-click-restore)", "n"),
     }
   end)]])
-  eq(maps, { "duet: open the file link clicked", "duet: open the file link clicked", 0, "" })
+  eq(maps, { "duet: open the file link clicked", "duet: open the file link clicked", 0 })
+end
+
+T["mouse"]["your mapping can end waiting for a key"] = function()
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  child.api.nvim_buf_set_lines(child.api.nvim_win_get_buf(code), 0, -1, false, { "foo" })
+  child.lua([[vim.keymap.set("n", "<C-LeftMouse>", "<LeftMouse>r")]])
+  child.lua("vim.api.nvim_set_current_win(s:window())")
+  click_code(code, "<C-LeftMouse>")
+  child.api.nvim_input("x")
+  eq(
+    child.lua(
+      "local buf = ...; return wait(function() return vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == 'xoo' end)",
+      {
+        child.api.nvim_win_get_buf(code),
+      }
+    ),
+    true
+  )
+  eq(
+    child.lua_get(
+      "vim.api.nvim_buf_call(s.buf, function() return vim.fn.maparg('<C-LeftMouse>', 'n', false, true).desc end)"
+    ),
+    "duet: open the file link clicked"
+  )
 end
 
 T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"] = MiniTest.new_set({
