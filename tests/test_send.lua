@@ -364,7 +364,7 @@ end
 S["submits a slash command while Claude Code's command menu is open"] = function()
   -- Claude Code's screens and readiness rule: the input box, then (once the paste has
   -- arrived) a cleared screen with the box holding `/clear` and the command menu below
-  -- it, so only the menu's screen can let Enter through.
+  -- it. The test checks that Enter went through on the menu's screen.
   local rule = string.rep("─", 60)
   local box = ("printf '%%s\\r\\n' '%s' '❯ ' '%s'"):format(rule, rule)
   local menu = ("printf '\\033[2J\\033[H'; printf '%%s\\r\\n' '%s' '❯ /clear' '%s' '  ❯ /clear    Start a new session'"):format(
@@ -381,13 +381,17 @@ S["submits a slash command while Claude Code's command menu is open"] = function
   )
   child.lua([[
     local claude = require("duet.agents").get("claude")
+    -- Whether the last check (the one before Enter) saw the menu.
+    _G.saw_menu = false
     _G.ready = function(_, lines)
+      _G.saw_menu = table.concat(lines, "\n"):find("❯ /clear    Start", 1, true) ~= nil
       return claude:is_ready(lines)
     end
   ]])
   child.lua("_G.send('/clear')")
   eq(child.lua_get("_G.wait_done(1)"), { "ok" })
   eq(child.lua_get("_G.read(_G.out)"), P .. "/clear" .. E .. "\r")
+  eq(child.lua_get("_G.saw_menu"), true)
 end
 
 S["shows a hidden agent that is asking something"] = function()

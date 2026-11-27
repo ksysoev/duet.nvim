@@ -360,8 +360,15 @@ local ready_cases = {
     ready = true,
   },
   {
-    name = "the slash-command menu below a multi-line input",
-    lines = { RULE, "❯ /compact", "  keep the tests", RULE, "  ❯ /compact   Free up context" },
+    -- Captured likewise after pasting `/compact keep the tests`: arguments close the menu.
+    name = "a slash command with arguments",
+    lines = {
+      RULE,
+      "❯ /compact keep the tests",
+      RULE,
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      string.rep(" ", 70) .. "ctrl+y to paste deleted text",
+    },
     ready = true,
   },
   {
