@@ -835,9 +835,10 @@ CTRL-click (`<C-LeftMouse>`) on a link in the agent's terminal opens it, as
 mode, and when the agent uses the mouse itself: duet gets the CTRL-click
 before the agent does, and a plain click still goes to the agent. A
 CTRL-click on text in the terminal that is not a link, or names a file that
-does not exist, does nothing: duet also maps the drag and release of the
-click (`<C-LeftDrag>`, `<C-LeftRelease>`) and keeps them, unless you map
-them in |duet-config-terminal-keys|. Anywhere else, such as another window
+does not exist, does nothing: until the button is let go, duet also keeps
+the click's drag and release (`<C-LeftDrag>`, `<C-LeftRelease>`, and
+`<LeftDrag>`, `<LeftRelease>` for when CTRL is let go first), except keys you
+map in |duet-config-terminal-keys|. Anywhere else, such as another window
 or a status line, the click gets Neovim's built-in action, not a mapping of
 your own for the same key. Only a click in a window
 showing the agent's terminal while that terminal is the current buffer is

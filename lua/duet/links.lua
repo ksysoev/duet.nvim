@@ -711,6 +711,9 @@ function M.at_mouse()
   if win == 0 or pos.line == 0 or not vim.api.nvim_win_is_valid(win) then
     return nil, nil -- the command line, a status line or a separator
   end
+  if pos.wincol <= vim.fn.getwininfo(win)[1].textoff then
+    return nil, nil -- the number, sign or fold column, where `column` is 1
+  end
   if vim.b[vim.api.nvim_win_get_buf(win)].duet_session == nil then
     return nil, nil
   end
@@ -987,14 +990,11 @@ function M.follow(opts)
   end
 end
 
--- Whether click() kept the last press for itself, leaving the focus in the terminal: its
--- drag and release are then kept too (see click_rest()).
-local swallowing = false
-
 ---The drag and release keys that go with a press `lhs`, such as `<C-LeftDrag>` and
----`<C-LeftRelease>` for `<C-LeftMouse>`. Nil for a key that is not a mouse button press.
+---`<C-LeftRelease>` for `<C-LeftMouse>`, and its button (`"Left"`). Nil for a key that is
+---not a mouse button press.
 ---@param lhs string
----@return { drag: string, release: string }|nil
+---@return { drag: string, release: string, button: string }|nil
 function M.click_keys(lhs)
   local mods, button = vim.fn.keytrans(vim.keycode(lhs)):match("^<(.-)(%u%l+)Mouse>$")
   if not mods then
@@ -1004,20 +1004,56 @@ function M.click_keys(lhs)
   return {
     drag = ("<%s%sDrag>"):format(mods, button),
     release = ("<%s%sRelease>"):format(mods, button),
+    button = button,
   }
 end
 
----The drag or release of a click (mapped next to the `"open_link_mouse"` key): kept when
----click() kept the press, so the agent gets no release without its press and a drag
----does not leave Terminal mode; else passed on.
----@param key string the drag or release key
----@param release boolean whether it is the release, which ends the click
-function M.click_rest(key, release)
-  if swallowing then
-    swallowing = not release
+-- The drag and release keys mapped for the rest of a click that click() kept, by buffer.
+---@type table<integer, string[]>
+local kept = {}
+
+---Remove the mappings keep_rest() made in `buf`.
+---@param buf integer
+local function end_kept(buf)
+  for _, key in ipairs(kept[buf] or {}) do
+    pcall(vim.keymap.del, { "t", "n" }, key, { buffer = buf })
+  end
+  kept[buf] = nil
+end
+
+---Keep the rest of a click whose press click() kept, in terminal `buf`: map its drag and
+---release, with and without the modifiers (they may be let go first), until a release
+---comes. The agent then gets no release without its press, and a drag does not leave
+---Terminal mode. Keys mapped in `terminal.keys` keep their action.
+---@param buf integer
+---@param lhs string the press
+local function keep_rest(buf, lhs)
+  end_kept(buf)
+  local keys = M.click_keys(lhs)
+  if not keys then
     return
   end
-  vim.api.nvim_feedkeys(vim.keycode(key), "ni", false)
+  local plain = assert(M.click_keys(("<%sMouse>"):format(keys.button)))
+  local skip = {}
+  for other, action in pairs(require("duet.config").get().terminal.keys) do
+    if action then
+      skip[vim.keycode(other)] = true
+    end
+  end
+  local mapped = {}
+  for _, key in ipairs({ keys.drag, keys.release, plain.drag, plain.release }) do
+    if not skip[vim.keycode(key)] then
+      skip[vim.keycode(key)] = true
+      local ends = key == keys.release or key == plain.release
+      vim.keymap.set({ "t", "n" }, key, function()
+        if ends then
+          end_kept(buf)
+        end
+      end, { buffer = buf, desc = "duet: the rest of a click kept for a file link" })
+      mapped[#mapped + 1] = key
+    end
+  end
+  kept[buf] = mapped
 end
 
 ---Open the link under the mouse (the `"open_link_mouse"` key action, mapped to a click
@@ -1027,14 +1063,13 @@ end
 ---@param lhs string the key the action is mapped to, e.g. `"<C-LeftMouse>"`
 function M.click(lhs)
   local link, win = M.at_mouse()
-  swallowing = false
   if not win then
     -- Ahead of the release or drag that may already be waiting.
     vim.api.nvim_feedkeys(vim.keycode(lhs), "ni", false)
     return
   end
   if not link then
-    swallowing = true
+    keep_rest(vim.api.nvim_get_current_buf(), lhs)
     return
   end
   local from, terminal_mode = vim.api.nvim_get_current_win(), vim.api.nvim_get_mode().mode == "t"
@@ -1050,7 +1085,9 @@ function M.click(lhs)
     if terminal_mode and vim.bo.buftype == "terminal" then
       vim.cmd.startinsert()
     end
-    swallowing = vim.b.duet_session ~= nil
+    if vim.b.duet_session ~= nil then
+      keep_rest(vim.api.nvim_get_current_buf(), lhs)
+    end
     require("duet.util").notify(err or "links: nothing to open", vim.log.levels.WARN)
   end
 end

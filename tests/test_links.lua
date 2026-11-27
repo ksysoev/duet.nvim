@@ -307,12 +307,12 @@ end
 
 T["click_keys()"] = MiniTest.new_set({
   parametrize = {
-    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>" } },
-    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>" } },
-    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>" } },
-    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>" } },
-    { "<2-C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>" } },
-    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>" } },
+    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
+    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
+    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>", button = "Left" } },
+    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>", button = "Right" } },
+    { "<2-C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
+    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle" } },
     { "gf", nil },
     { "<C-LeftRelease>", nil },
   },
@@ -321,7 +321,7 @@ T["click_keys()"] = MiniTest.new_set({
 T["click_keys()"]["for %s"] = function(lhs, want)
   -- Compared as keys: `<M-C-LeftDrag>` is `<C-M-LeftDrag>`.
   local function codes(keys)
-    return keys and vim.tbl_map(vim.keycode, keys)
+    return keys and { drag = vim.keycode(keys.drag), release = vim.keycode(keys.release), button = keys.button }
   end
   eq(codes(require("duet.links").click_keys(lhs)), codes(want))
 end
@@ -1131,6 +1131,40 @@ T["mouse"]["a Ctrl+drag on text without a link keeps Terminal mode"] = function(
   terminal_mode()
   click("nothing", nil, 2, "<C-LeftDrag> <C-LeftRelease>")
   eq(child.lua_get("{ vim.api.nvim_get_mode().mode, where().terminal }"), { "t", true })
+end
+
+T["mouse"]["a click kept for itself ends with its release, with or without Ctrl"] = function()
+  agent(TRACK .. "printf 'nothing here\\n'")
+  child.o.mousetime = 1 -- the next click is not a double-click
+  terminal_mode()
+  -- CTRL let go before the button: the release comes without it.
+  click("nothing", nil, 2, "<C-LeftDrag> <LeftRelease>")
+  eq(reports(), {})
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
+  -- The next plain click goes to the agent whole.
+  click("here", "<LeftMouse>", 0, "<LeftRelease>")
+  eq(
+    child.lua_get(
+      "wait(function() return vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('[[<0;', 1, true) ~= nil and vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('m', 1, true) ~= nil end)"
+    ),
+    true
+  )
+  eq(child.lua_get("vim.fn.maparg('<LeftRelease>', 't')"), "")
+end
+
+T["mouse"]["a release mapped in terminal.keys keeps its action"] = function()
+  agent("printf 'nothing here\\n'", { terminal = { keys = { ["<C-LeftRelease>"] = "hide" } } })
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftRelease>")
+  eq(child.lua_get("wait(function() return not s:is_visible() end)"), true)
+end
+
+T["mouse"]["Ctrl+click on the number column is not a click on the text"] = function()
+  agent("printf 'a.lua:1\\n'")
+  child.lua("vim.api.nvim_set_current_win(s:window()); vim.wo.number = true; vim.wo.signcolumn = 'yes'")
+  click("a.lua", nil, -3)
+  eq(child.lua_get("where().terminal"), true)
+  eq(child.lua_get("_G.notes"), {})
 end
 
 T["mouse"]["Ctrl+click follows an OSC 8 hyperlink"] = function()
