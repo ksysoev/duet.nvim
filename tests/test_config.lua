@@ -81,6 +81,21 @@ local merge_cases = {
     end,
   },
   {
+    name = "a list option replaces the default list",
+    opts = { links = { replace_filetypes = { "starter" } } },
+    check = function(c)
+      eq(c.links.replace_filetypes, { "starter" })
+      eq(c.links.debounce_ms, 100)
+    end,
+  },
+  {
+    name = "an empty list replaces the default list",
+    opts = { links = { replace_filetypes = {} } },
+    check = function(c)
+      eq(c.links.replace_filetypes, {})
+    end,
+  },
+  {
     name = "setup() twice does not stack",
     setup_first = { review = { a = 1 } },
     opts = { review = { b = 2 } },
@@ -164,6 +179,16 @@ T["validation error"] = MiniTest.new_set({
     { "unknown key action", { terminal = { keys = { ["<C-x>"] = "nope" } } }, "^terminal.keys.<C%-x>: expected" },
     { "negative submit delay", { send = { submit_delay_ms = -1 } }, "^send.submit_delay_ms: expected" },
     { "fractional ready timeout", { send = { ready_timeout_ms = 1.5 } }, "^send.ready_timeout_ms: expected" },
+    {
+      "replace_filetypes as a string",
+      { links = { replace_filetypes = "alpha" } },
+      "^links.replace_filetypes: expected",
+    },
+    {
+      "replace_filetypes with a number",
+      { links = { replace_filetypes = { "alpha", 1 } } },
+      "^links.replace_filetypes: expected",
+    },
     { "watch as a boolean", { watch = false }, "^watch: expected table" },
     { "watch enabled as a string", { watch = { enabled = "yes" } }, "^watch.enabled: expected" },
     { "negative watch debounce", { watch = { debounce_ms = -1 } }, "^watch.debounce_ms: expected" },

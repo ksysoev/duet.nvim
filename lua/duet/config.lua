@@ -41,6 +41,7 @@ M.defaults = {
   links = {
     highlight = false,
     debounce_ms = 100,
+    replace_filetypes = { "snacks_dashboard", "alpha", "dashboard", "ministarter", "startify" },
   },
   watch = {
     enabled = true,
@@ -164,6 +165,7 @@ M.schema = {
   links = { type = "table" },
   ["links.highlight"] = { type = "boolean" },
   ["links.debounce_ms"] = { type = validate_count, desc = "non-negative integer" },
+  ["links.replace_filetypes"] = { type = is_string_list, desc = "list of strings" },
   watch = { type = "table" },
   ["watch.enabled"] = { type = "boolean" },
   ["watch.debounce_ms"] = { type = validate_count, desc = "non-negative integer" },
