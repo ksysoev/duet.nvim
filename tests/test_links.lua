@@ -650,6 +650,79 @@ local function follow_from(prev)
   eq(rel(child.lua_get("where().name")), "a.lua")
 end
 
+---Show `file` in the current window, with 'winfixbuf' set when `pinned`. Returns the
+---window.
+---@param file string
+---@param pinned? boolean
+---@return integer
+local function show_code(file, pinned)
+  child.cmd("edit " .. file)
+  child.wo.winfixbuf = pinned == true
+  return child.lua_get("vim.api.nvim_get_current_win()")
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"] = MiniTest.new_set()
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a split"] = function()
+  local pinned = show_code("b.lua", true)
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { pinned }), true)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { pinned })), "b.lua")
+  -- The split does not take the pinned window's 'winfixbuf'.
+  eq(child.lua_get("vim.wo.winfixbuf"), false)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a start screen"] = function()
+  local pinned = show_code("b.lua", true)
+  local dashboard = screen("alpha", "botright new")
+  agent("printf 'a.lua:1\\n'")
+  follow_from(pinned)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), dashboard)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for another code window"] = function()
+  local free = show_code("c.lua")
+  child.cmd("split")
+  local pinned = show_code("b.lua", true)
+  agent("printf 'a.lua:1\\n'")
+  -- The pinned window is the previous one, and comes first in the tab.
+  follow_from(pinned)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), free)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the file"] = function()
+  local pinned = show_code("lua/duet/init.lua", true)
+  agent("printf 'lua/duet/init.lua:7\\n'")
+  child.lua("cursor_on('init.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), pinned)
+  eq(child.lua_get("vim.fn.line('.')"), 7)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the file by another name"] = function()
+  -- Neovim resolves a symlinked directory in a buffer's name, but not a symlinked file.
+  vim.uv.fs_symlink(root .. "/a.lua", root .. "/alias.lua")
+  local pinned = show_code("alias.lua", true)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(0)")), "alias.lua")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), pinned)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+end
+
 T["terminal"]["a start screen is replaced"] = MiniTest.new_set({
   parametrize = { { "snacks_dashboard" }, { "alpha" }, { "dashboard" }, { "ministarter" }, { "startify" } },
 })
@@ -1023,8 +1096,9 @@ local TRACK = "printf '\\033[?1000h\\033[?1006h'; "
 ---@param offset? integer cells after the start of `needle`
 ---@param rest? string keys sent after the press at the same place, e.g. "<C-LeftDrag>"
 local function click(needle, key, offset, rest)
-  local pos = child.lua_get(
-    [[(function(needle, offset)
+  -- Where `needle` is on the screen, as {row, col} for nvim_input() (0-based). Taken
+  -- again for each probe: a float laid out again after it opened has moved.
+  child.lua([[_G.locate = function(needle, offset)
       local row
       wait(function()
         row = vim.iter(ipairs(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false))):find(function(_, line)
@@ -1036,28 +1110,68 @@ local function click(needle, key, offset, rest)
       local col = vim.api.nvim_buf_get_lines(s.buf, row - 1, row, false)[1]:find(needle, 1, true)
       local pos = vim.fn.screenpos(s:window(), row, col)
       return { pos.row - 1, pos.col - 1 + offset }
-    end)(...)]],
-    { needle, offset or 0 }
-  )
+    end]])
+  local pos
   -- A click lands in a window only once the screen shows it: until then it goes to the
   -- window below (a new floating terminal), which a slow runner can be clicking. Probe
   -- with a button no test uses until a probe lands in the terminal's window.
+  -- A probe that misses can leave Terminal mode or focus another window: put both back
+  -- before the next one, as they were before probing.
   child.lua([[
     _G.probed = nil
+    _G.modes = {}
+    _G.probe_from = { win = vim.api.nvim_get_current_win(), terminal = vim.api.nvim_get_mode().mode == "t" }
+    _G.probe_au = vim.api.nvim_create_autocmd("ModeChanged", {
+      callback = function()
+        table.insert(_G.modes, vim.v.event.old_mode .. ">" .. vim.v.event.new_mode)
+      end,
+    })
     vim.keymap.set({ "t", "n" }, "<X1Mouse>", function()
       _G.probed = vim.fn.getmousepos().winid
     end, { buffer = s.buf })
+    _G.unprobe = function()
+      _G.probed = nil
+      local mode = vim.api.nvim_get_mode().mode
+      if mode ~= "n" and mode ~= "t" then
+        vim.api.nvim_feedkeys(vim.keycode("<C-\\><C-N>"), "nx", false)
+      end
+      if vim.api.nvim_win_is_valid(_G.probe_from.win) then
+        vim.api.nvim_set_current_win(_G.probe_from.win)
+      end
+      if _G.probe_from.terminal and vim.api.nvim_get_mode().mode ~= "t" then
+        vim.cmd.startinsert()
+        wait(function() return vim.api.nvim_get_mode().mode == "t" end, 500)
+      end
+    end
   ]])
   local landed = false
   for _ = 1, 100 do
+    pos = child.lua_get("_G.locate(...)", { needle, offset or 0 })
     child.api.nvim_input(("<X1Mouse><%d,%d>"):format(pos[2], pos[1]))
     if child.lua_get("wait(function() return _G.probed ~= nil end, 100) and _G.probed == s:window()") then
       landed = true
       break
     end
-    child.lua("_G.probed = nil; vim.wait(20)")
+    child.lua("_G.unprobe(); vim.wait(20)")
   end
-  child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf })")
+  child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf }); vim.api.nvim_del_autocmd(_G.probe_au)")
+  if not landed then
+    -- What the probes saw, for a runner where they never land.
+    landed = child.lua_get(
+      [[vim.inspect({
+        pos = ...,
+        win = s:window(),
+        config = s:window() and vim.api.nvim_win_get_config(s:window()),
+        mode = vim.api.nvim_get_mode().mode,
+        modes = _G.modes,
+        current = vim.api.nvim_get_current_win(),
+        mouse = vim.o.mouse,
+        wins = vim.api.nvim_tabpage_list_wins(0),
+        probed = _G.probed,
+      })]],
+      { pos }
+    )
+  end
   eq({ needle, landed }, { needle, true })
   local keys = vim.iter({ key or "<C-LeftMouse>", rest and vim.split(rest, " ") or nil }):flatten():totable()
   for _, k in ipairs(keys) do

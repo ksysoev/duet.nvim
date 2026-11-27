@@ -774,6 +774,14 @@ C["from a terminal, finds a code window that is not the previous one"] = functio
   eq(ctx().same_win, true)
 end
 
+C["from a terminal, takes a code window that sets 'winfixbuf'"] = function()
+  child.wo.winfixbuf = true
+  child.cmd("vsplit | terminal")
+  child.cmd("Duet probe")
+  local got = ctx()
+  eq({ got.same_win, got.same_buf }, { true, true })
+end
+
 C["paths are relative to the session the text goes to"] = function()
   local other = h.tmp_git_repo({ ["b.lua"] = "x" })
   child.lua(

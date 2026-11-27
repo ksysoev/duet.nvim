@@ -848,10 +848,13 @@ exist is not a link: `gf` on it shows a message, and `]l` and `[l` skip it.
 A directory opens in whatever handles directories (|netrw|, a file
 explorer plugin).
 
-Where the file opens: in the previous window if it shows a file, else in the
-first window in the tab that does. A floating terminal is hidden first, so the
-file isn't behind it. With no such window, the file replaces a start screen,
-as |:edit| would: a window whose filetype is in
+Where the file opens: in the current window if it shows a file (as when
+|duet.links.open()| is called from one), else the previous window if it does,
+else the first window in the tab that does. A window that sets 'winfixbuf' is
+skipped, unless it already shows the file: its buffer can't change.
+(|duet-context|'s `{file}` still refers to it.) A floating terminal is hidden
+first, so the file isn't behind it. With no such window, the file replaces a
+start screen, as |:edit| would: a window whose filetype is in
 |duet-config-links-replace_filetypes| (the snacks, alpha, dashboard-nvim,
 mini.starter and startify dashboards by default), unless the buffer is
 modified or a terminal, or the window is floating or sets 'winfixbuf'. The
