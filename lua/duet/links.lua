@@ -828,13 +828,23 @@ local function replaceable_window()
   return best
 end
 
----The window to open a file in: a code window in the tab, else a start screen window,
----else a new split. A floating duet terminal in front is hidden first, so the file is
----not opened under it.
+---Whether `win` shows the file `abs`.
+---@param win integer
+---@param abs string normalized absolute path
+---@return boolean
+local function shows(win, abs)
+  return vim.fs.normalize(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))) == abs
+end
+
+---The window to open `abs` in: a code window in the tab, else a start screen window,
+---else a new split. A code window that sets 'winfixbuf' is skipped unless it already
+---shows the file, as `:edit` would fail there. A floating duet terminal in front is
+---hidden first, so the file is not opened under it.
+---@param abs string normalized absolute path
 ---@return integer|nil win
 ---@return duet.links.Undo undo
 ---@return string|nil err the floating terminal could not be hidden
-local function target_window()
+local function target_window(abs)
   local util = require("duet.util")
   local cur = vim.api.nvim_get_current_win()
   local undo = { win = cur }
@@ -850,7 +860,9 @@ local function target_window()
       cur = vim.api.nvim_get_current_win()
     end
   end
-  local win, found = util.code_window()
+  local win, found = util.code_window(function(id)
+    return not vim.wo[id].winfixbuf or shows(id, abs)
+  end)
   if found then
     return win, undo
   end
@@ -935,13 +947,13 @@ function M.open(link, opts)
     end
   end
   ensure_highlights()
-  local win, undo, hide_err = target_window()
+  local win, undo, hide_err = target_window(abs)
   if not win then
     return nil, ("links: cannot open '%s': %s"):format(link.path, hide_err)
   end
   vim.api.nvim_set_current_win(win)
   local buf = vim.api.nvim_win_get_buf(win)
-  if vim.fs.normalize(vim.api.nvim_buf_get_name(buf)) ~= abs then
+  if not shows(win, abs) then
     vim.cmd("normal! m'")
     local ok, edit_err = pcall(vim.cmd.edit, vim.fn.fnameescape(abs))
     if not ok then

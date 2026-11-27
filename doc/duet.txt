@@ -849,7 +849,9 @@ A directory opens in whatever handles directories (|netrw|, a file
 explorer plugin).
 
 Where the file opens: in the previous window if it shows a file, else in the
-first window in the tab that does. A floating terminal is hidden first, so the
+first window in the tab that does. A window that sets 'winfixbuf' is skipped,
+unless it already shows the file: its buffer can't change. (|duet-context|'s
+`{file}` still refers to it.) A floating terminal is hidden first, so the
 file isn't behind it. With no such window, the file replaces a start screen,
 as |:edit| would: a window whose filetype is in
 |duet-config-links-replace_filetypes| (the snacks, alpha, dashboard-nvim,

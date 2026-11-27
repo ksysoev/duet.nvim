@@ -650,6 +650,66 @@ local function follow_from(prev)
   eq(rel(child.lua_get("where().name")), "a.lua")
 end
 
+---Show `file` in the current window, with 'winfixbuf' set when `pinned`. Returns the
+---window.
+---@param file string
+---@param pinned? boolean
+---@return integer
+local function code(file, pinned)
+  child.cmd("edit " .. file)
+  child.wo.winfixbuf = pinned == true
+  return child.lua_get("vim.api.nvim_get_current_win()")
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"] = MiniTest.new_set()
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a split"] = function()
+  local pinned = code("b.lua", true)
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { pinned }), true)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { pinned })), "b.lua")
+  -- The split does not take the pinned window's 'winfixbuf'.
+  eq(child.lua_get("vim.wo.winfixbuf"), false)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for a start screen"] = function()
+  local pinned = code("b.lua", true)
+  local dashboard = screen("alpha", "botright new")
+  agent("printf 'a.lua:1\\n'")
+  follow_from(pinned)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), dashboard)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is skipped for another code window"] = function()
+  local free = code("c.lua")
+  child.cmd("split")
+  local pinned = code("b.lua", true)
+  agent("printf 'a.lua:1\\n'")
+  -- The pinned window is the previous one, and comes first in the tab.
+  follow_from(pinned)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), free)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+end
+
+T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the file"] = function()
+  local pinned = code("lua/duet/init.lua", true)
+  agent("printf 'lua/duet/init.lua:7\\n'")
+  child.lua("cursor_on('init.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), pinned)
+  eq(child.lua_get("vim.fn.line('.')"), 7)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+end
+
 T["terminal"]["a start screen is replaced"] = MiniTest.new_set({
   parametrize = { { "snacks_dashboard" }, { "alpha" }, { "dashboard" }, { "ministarter" }, { "startify" } },
 })
