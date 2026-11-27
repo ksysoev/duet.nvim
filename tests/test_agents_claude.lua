@@ -491,4 +491,73 @@ for _, case in ipairs(ready_cases) do
   end
 end
 
+T["read_input()"] = MiniTest.new_set()
+
+local NBSP = "\194\160"
+local R80 = string.rep("─", 80)
+
+local input_cases = {
+  { name = "the startup placeholder", lines = READY, input = '❯ Try "how do I log an error?"' },
+  {
+    name = "typed text, trailing spaces removed",
+    lines = { R80, "❯" .. NBSP .. "fix the bug   ", R80, "  ⏵⏵ auto mode on" },
+    input = "❯" .. NBSP .. "fix the bug",
+  },
+  { name = "an empty input", lines = { R80, "❯" .. NBSP, R80 }, input = "❯" .. NBSP },
+  {
+    name = "a multi-line input",
+    lines = { R80, "❯" .. NBSP .. "line one", "  line two", R80, "  ? for shortcuts" },
+    input = "❯" .. NBSP .. "line one\n  line two",
+  },
+  {
+    name = "a slash command with its menu open",
+    lines = {
+      R80,
+      "❯" .. NBSP .. "/copy",
+      R80,
+      "  ❯ /copy      Copy Claude's last response to the clipboard",
+      "    /compact   Clear conversation history but keep a summary",
+    },
+    input = "❯" .. NBSP .. "/copy",
+  },
+  {
+    name = "the live box, not an older one above it",
+    lines = { R80, "❯ old text", R80, "⏺ an answer", R80, "❯" .. NBSP, R80 },
+    input = "❯" .. NBSP,
+  },
+  {
+    name = "a box cut off at the bottom",
+    lines = { R80, "❯" .. NBSP .. "line one", "  line two" },
+    input = "❯" .. NBSP .. "line one\n  line two",
+  },
+  { name = "shell mode", lines = { R80, "!" .. NBSP .. "ls", R80 }, input = "!" .. NBSP .. "ls" },
+  {
+    name = "shell mode below an older box",
+    lines = { R80, "❯ old text", R80, "⏺ an answer", R80, "!" .. NBSP .. "ls", R80 },
+    input = "!" .. NBSP .. "ls",
+  },
+  { name = "no input box", lines = vim.list_slice(READY, 1, 3), input = vim.NIL },
+  {
+    name = "a permission dialog",
+    lines = {
+      R80,
+      "❯ ",
+      R80,
+      "⏺ Bash(touch created.txt)",
+      R80,
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    },
+    input = vim.NIL,
+  },
+}
+
+for _, case in ipairs(input_cases) do
+  T["read_input()"][case.name] = function()
+    local got = claude():read_input(case.lines)
+    eq(got == nil and vim.NIL or got, case.input)
+  end
+end
+
 return T

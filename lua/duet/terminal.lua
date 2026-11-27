@@ -1227,20 +1227,31 @@ local function last_lines(buf, n)
   return vim.api.nvim_buf_get_lines(buf, math.max(0, last - n), last, false)
 end
 
+---Why the session's agent no longer runs in its terminal, or nil while it does.
+---@param self duet.Session
+---@return string|nil err the agent exited, or was stopped
+local function gone(self)
+  if sessions[self.id] == self and self.job and vim.api.nvim_buf_is_valid(self.buf) then
+    return nil
+  end
+  local name = self.agent.name
+  if self.stopped then
+    return ("terminal: %s was stopped"):format(name)
+  elseif self.seen_ready then
+    return ("terminal: %s exited"):format(name)
+  end
+  return ("terminal: %s exited before it was ready for input"):format(name)
+end
+
 ---Whether the agent's TUI accepts input now, as the adapter's `is_ready` tells from the
 ---terminal's last lines: false while it starts up or shows a dialog. An agent without
 ---`is_ready` is ready whenever it runs.
 ---@return boolean|nil ready
 ---@return string|nil err the agent is gone, or the adapter's is_ready failed
 function Session:is_ready()
-  if sessions[self.id] ~= self or not self.job or not vim.api.nvim_buf_is_valid(self.buf) then
-    local name = self.agent.name
-    if self.stopped then
-      return nil, ("terminal: %s was stopped"):format(name)
-    elseif self.seen_ready then
-      return nil, ("terminal: %s exited"):format(name)
-    end
-    return nil, ("terminal: %s exited before it was ready for input"):format(name)
+  local err = gone(self)
+  if err then
+    return nil, err
   end
   local ready = true
   if self.agent.is_ready then
@@ -1254,14 +1265,35 @@ function Session:is_ready()
   return ready
 end
 
----Call `cb` once the agent's TUI accepts input (see Session:is_ready). Polls without
----blocking; `cb` gets an error after `timeout_ms` (with `timed_out` set), or if the job
----exits or is stopped first.
+---What the agent's input box holds now, as the adapter's `read_input` reads it from the
+---terminal's last lines: nil if no input box is on screen, or if the adapter has no
+---`read_input`, the agent is gone, or `read_input` failed (`err` tells which of the last two).
+---@return string|nil input
+---@return string|nil err
+function Session:input()
+  if not self.agent.read_input then
+    return nil
+  end
+  local err = gone(self)
+  if err then
+    return nil, err
+  end
+  local ok, result = pcall(self.agent.read_input, self.agent, last_lines(self.buf, READY_LINES))
+  if not ok then
+    return nil, ("terminal: %s read_input failed: %s"):format(self.agent.name, result)
+  end
+  return type(result) == "string" and result or nil
+end
+
+---Call `check` now and then every few milliseconds, without blocking, until it returns
+---true or an error, then call `cb` with that error. After `timeout_ms`, `cb` gets
+---`timed_out = true` instead.
 ---@param timeout_ms integer
+---@param check fun(): boolean|nil, string|nil
 ---@param cb fun(err?: string, timed_out?: boolean)
-function Session:when_ready(timeout_ms, cb)
-  local ready, err = self:is_ready()
-  if ready or err then
+function Session:poll(timeout_ms, check, cb)
+  local passed, err = check()
+  if passed or err then
     cb(err)
     return
   end
@@ -1288,20 +1320,33 @@ function Session:when_ready(timeout_ms, cb)
       if done then
         return
       end
-      local now_ready, check_err = self:is_ready()
-      if now_ready or check_err then
+      local now_passed, check_err = check()
+      if now_passed or check_err then
         finish(check_err)
       elseif vim.uv.now() >= deadline then
-        finish(
-          ("terminal: %s is not ready for input after %d ms (answer its prompt in the terminal, then try again)"):format(
-            self.agent.name,
-            timeout_ms
-          ),
-          true
-        )
+        finish(nil, true)
       end
     end)
   )
+end
+
+---Call `cb` once the agent's TUI accepts input (see Session:is_ready). Polls without
+---blocking; `cb` gets an error after `timeout_ms` (with `timed_out` set), or if the job
+---exits or is stopped first.
+---@param timeout_ms integer
+---@param cb fun(err?: string, timed_out?: boolean)
+function Session:when_ready(timeout_ms, cb)
+  self:poll(timeout_ms, function()
+    return self:is_ready()
+  end, function(err, timed_out)
+    if timed_out then
+      err = ("terminal: %s is not ready for input after %d ms (answer its prompt in the terminal, then try again)"):format(
+        self.agent.name,
+        timeout_ms
+      )
+    end
+    cb(err, timed_out)
+  end)
 end
 
 ---Show the session in the current tab, hiding any other duet session there. Focus does not move.

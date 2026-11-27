@@ -18,7 +18,14 @@ M.CHUNK_SIZE = 4096
 -- How long the agent may look not ready when Enter is due before duet takes it for a
 -- dialog: a redraw, e.g. after a large paste, can leave the input box off screen for a
 -- while. A real dialog only makes the send fail later.
+-- It is also how long the agent may take to show the paste in its input box (with an
+-- adapter that has `read_input`) before duet presses Enter anyway.
 M.SUBMIT_GRACE_MS = 2000
+-- With an adapter that has `read_input`: how long the agent may take to show that it took
+-- Enter in (its input box changes) before the next send goes on anyway.
+M.SUBMIT_SETTLE_MS = 2000
+-- The longest single-line text that duet looks for in the input box (see M.probe).
+M.PROBE_TEXT_MAX = 200
 
 ---@class duet.SendOpts
 ---@field submit? boolean press Enter after the paste (default: true)
@@ -100,6 +107,39 @@ function M.writes(text)
   vim.list_extend(list, M.chunks(text, M.CHUNK_SIZE))
   list[#list + 1] = M.PASTE_END
   return list
+end
+
+---Remove whitespace, no-break spaces included: an agent's input box may wrap a text,
+---indent its rows, or put a no-break space after a mode character (Claude Code shows `!ls`
+---as `!` and U+00A0 then `ls`). Pure.
+---@param text string
+---@return string
+function M.compact(text)
+  return (text:gsub("%s", ""):gsub("\194\160", ""))
+end
+
+---What the agent's input box ends with, compacted (see M.compact), while `text` is in it:
+---the whole text. nil for text with several lines or more than PROBE_TEXT_MAX bytes, which
+---an agent may show as a summary such as `[Pasted text #1 +20 lines]`, or text that is
+---only whitespace once compacted. Pure.
+---@param text string sanitized text
+---@return string|nil
+function M.probe(text)
+  if text:find("\n") or #text > M.PROBE_TEXT_MAX then
+    return nil
+  end
+  local probe = M.compact(text)
+  return probe ~= "" and probe or nil
+end
+
+---Whether the input box `box` shows the text whose probe is `probe` (see M.probe): pasted
+---text goes at the end of the box, so a placeholder that only holds the same words, such
+---as Claude Code's `Try "write a test…"`, doesn't count.
+---@param box string
+---@param probe string
+---@return boolean
+local function shows(box, probe)
+  return vim.endswith(M.compact(box), probe)
 end
 
 ---@param session duet.Session
@@ -189,26 +229,108 @@ local function process(session)
     end
     local writes = M.writes(item.text)
     require("duet.log").debug("session %s: sending %d bytes in %d writes", session.id, #item.text, #writes)
-    local i = 0
-    local function submit()
-      -- The agent may have started asking something (a permission dialog) since the
-      -- paste: Enter would answer it. Leave the text in its input instead, and drop the
-      -- sends queued after it, which would be pasted after it and submitted with it.
-      session:when_ready(M.SUBMIT_GRACE_MS, function(submit_err, timed_out)
-        if timed_out then
-          reveal(session)
-          fail(("send: %s is asking something: the text was pasted but not submitted"):format(session.agent.name))
-          return
-        elseif submit_err then
-          fail(submit_err)
-          return
+    -- With an adapter that reads the input box: what the box showed before the paste, to
+    -- tell when the agent has taken the paste in, then Enter.
+    local reading = session.agent.read_input ~= nil
+    local probe = M.probe(item.text)
+    ---The input box now, or nil. A read_input that fails turns the waits off for this
+    ---item: the send goes on as for an adapter without one.
+    local function input()
+      if not reading then
+        return nil
+      end
+      local box, input_err = session:input()
+      if input_err then
+        reading = false
+        -- A session that is gone is reported by the write, or by the next item.
+        if session:is_running() then
+          require("duet.log").warn("session %s: %s: not waiting for the input box", session.id, input_err)
         end
-        local ok, err = write(session, M.SUBMIT)
-        if not ok then
-          fail(err)
-          return
+      end
+      return box
+    end
+    ---Whether `box` shows the text: it has changed since `from`, and holds the text when
+    ---it has a probe.
+    local function holds(box, from)
+      return box ~= nil and box ~= from and (not probe or shows(box, probe))
+    end
+    local before = input()
+    local i = 0
+    ---@param seen boolean the paste showed in the box
+    local function press_enter(seen)
+      local shown = input()
+      local ok, err = write(session, M.SUBMIT)
+      if not ok then
+        fail(err)
+        return
+      end
+      if not reading then
+        done()
+        return
+      elseif not seen then
+        -- Drawn later, the paste would pass for Enter taken in: wait the whole time.
+        vim.defer_fn(done, M.SUBMIT_SETTLE_MS)
+        return
+      end
+      -- Wait until the agent has taken Enter in: the box has changed, and is back to what
+      -- it showed before the paste, or no longer shows the text (without a probe: holds
+      -- less than at Enter, so a summary drawn late doesn't count). Until then, a paste
+      -- would land in the text being submitted (Claude Code submits a slash command after
+      -- a moment, more so while it starts).
+      local shown_size = #M.compact(shown or "")
+      session:poll(M.SUBMIT_SETTLE_MS, function()
+        local box = input()
+        if not reading then
+          return true
+        elseif box == nil or box == shown then
+          return false
+        elseif box == before then
+          return true
+        elseif probe then
+          return not shows(box, probe)
+        end
+        return #M.compact(box) < shown_size
+      end, function(_, timed_out)
+        if timed_out then
+          require("duet.log").debug("session %s: the input did not change after Enter", session.id)
         end
         done()
+      end)
+    end
+    local function submit()
+      -- Wait until the agent shows the paste in its input: Enter before it has taken the
+      -- paste in would be checked against an old screen. The agent may also have started
+      -- asking something (a permission dialog) since the paste: Enter would answer it.
+      -- Leave the text in its input instead, and drop the sends queued after it, which
+      -- would be pasted after it and submitted with it.
+      local seen = false
+      session:poll(M.SUBMIT_GRACE_MS, function()
+        local ready, check_err = session:is_ready()
+        if not ready then
+          return ready, check_err
+        end
+        local box = input()
+        seen = reading and holds(box, before)
+        return seen or not reading
+      end, function(poll_err, timed_out)
+        if poll_err then
+          fail(poll_err)
+          return
+        elseif timed_out then
+          local ready, check_err = session:is_ready()
+          if check_err then
+            fail(check_err)
+            return
+          elseif not ready then
+            reveal(session)
+            fail(("send: %s is asking something: the text was pasted but not submitted"):format(session.agent.name))
+            return
+          end
+          -- Ready, but the paste never showed: press Enter anyway, as for an agent
+          -- whose input duet can't read.
+          require("duet.log").debug("session %s: the paste did not show in the input", session.id)
+        end
+        press_enter(seen)
       end)
     end
     local function write_next()
