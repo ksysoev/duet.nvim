@@ -24,10 +24,8 @@ M.SUBMIT_GRACE_MS = 2000
 -- With an adapter that has `read_input`: how long the agent may take to show that it took
 -- Enter in (its input box changes) before the next send goes on anyway.
 M.SUBMIT_SETTLE_MS = 2000
--- The longest single-line text whose last word duet looks for in the input box, and how
--- much of that word (see M.probe).
+-- The longest single-line text that duet looks for in the input box (see M.probe).
 M.PROBE_TEXT_MAX = 200
-M.PROBE_BYTES = 16
 
 ---@class duet.SendOpts
 ---@field submit? boolean press Enter after the paste (default: true)
@@ -111,19 +109,33 @@ function M.writes(text)
   return list
 end
 
----A piece of `text` that the agent's input box shows while the text is in it: its last
----word, cut to PROBE_BYTES (the last, since an agent may take a leading character as a
----mode switch, as Claude Code does with `!`). nil for text with several lines or more than
----PROBE_TEXT_MAX bytes, which an agent may show as a summary such as
----`[Pasted text #1 +20 lines]`. Pure.
+---Remove whitespace, no-break spaces included: an agent's input box may wrap a text,
+---indent its rows, or put a no-break space after a mode character (Claude Code shows `!ls`
+---as `!` and U+00A0 then `ls`). Pure.
+---@param text string
+---@return string
+function M.compact(text)
+  return (text:gsub("%s", ""):gsub("\194\160", ""))
+end
+
+---What the agent's input box holds, compacted (see M.compact), while `text` is in it: the
+---whole text. nil for text with several lines or more than PROBE_TEXT_MAX bytes, which an
+---agent may show as a summary such as `[Pasted text #1 +20 lines]`. Pure.
 ---@param text string sanitized text
 ---@return string|nil
 function M.probe(text)
   if text:find("\n") or #text > M.PROBE_TEXT_MAX then
     return nil
   end
-  local word = text:match("(%S+)%s*$")
-  return word and M.chunks(word, M.PROBE_BYTES)[1]
+  return M.compact(text)
+end
+
+---Whether the input box `box` shows the text whose probe is `probe` (see M.probe).
+---@param box string
+---@param probe string|nil
+---@return boolean
+local function shows(box, probe)
+  return probe ~= nil and M.compact(box):find(probe, 1, true) ~= nil
 end
 
 ---@param session duet.Session
@@ -226,13 +238,17 @@ local function process(session)
       local box, input_err = session:input()
       if input_err then
         reading = false
-        require("duet.log").warn("session %s: %s: not waiting for the input box", session.id, input_err)
+        -- A session that is gone is reported by the write, or by the next item.
+        if session:is_running() then
+          require("duet.log").warn("session %s: %s: not waiting for the input box", session.id, input_err)
+        end
       end
       return box
     end
-    ---Whether `box` shows the text: it has changed since `from`, and holds the probe.
+    ---Whether `box` shows the text: it has changed since `from`, and holds the text when
+    ---it has a probe.
     local function holds(box, from)
-      return box ~= nil and box ~= from and (not probe or box:find(probe, 1, true) ~= nil)
+      return box ~= nil and box ~= from and (not probe or shows(box, probe))
     end
     local before = input()
     local i = 0
@@ -252,12 +268,16 @@ local function process(session)
         vim.defer_fn(done, M.SUBMIT_SETTLE_MS)
         return
       end
-      -- Wait until the agent has taken Enter in: the box has changed and no longer holds
-      -- the text. Until then, a paste would land in the text being submitted (Claude Code
-      -- submits a slash command after a moment, more so while it starts).
+      -- Wait until the agent has taken Enter in: the box has changed, and is back to what
+      -- it showed before the paste or no longer holds the text. Until then, a paste would
+      -- land in the text being submitted (Claude Code submits a slash command after a
+      -- moment, more so while it starts).
       session:poll(M.SUBMIT_SETTLE_MS, function()
         local box = input()
-        return not reading or (box ~= nil and box ~= shown and not (probe and box:find(probe, 1, true)))
+        if not reading then
+          return true
+        end
+        return box ~= nil and box ~= shown and (box == before or not shows(box, probe))
       end, function(_, timed_out)
         if timed_out then
           require("duet.log").debug("session %s: the input did not change after Enter", session.id)

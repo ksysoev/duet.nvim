@@ -531,6 +531,11 @@ local input_cases = {
     input = "❯" .. NBSP .. "line one\n  line two",
   },
   { name = "shell mode", lines = { R80, "!" .. NBSP .. "ls", R80 }, input = "!" .. NBSP .. "ls" },
+  {
+    name = "shell mode below an older box",
+    lines = { R80, "❯ old text", R80, "⏺ an answer", R80, "!" .. NBSP .. "ls", R80 },
+    input = "!" .. NBSP .. "ls",
+  },
   { name = "no input box", lines = vim.list_slice(READY, 1, 3), input = vim.NIL },
   {
     name = "a permission dialog",

@@ -253,11 +253,13 @@ end
 ---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
 ---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
 ---screen counts: an older frame left in the scrollback above a dialog doesn't. The
----slash-command menu's `❯` doesn't count (see last_marker). nil if there is none.
+---slash-command menu's `❯` doesn't count (see last_marker). The last such prompt line
+---counts: in shell mode the live box starts with `!`, so an older box can sit between
+---the last `❯` and it. nil if there is none.
 ---@param lines string[]
 ---@return integer|nil
 local function live_prompt(lines)
-  for i = math.max(2, last_marker(lines)), #lines do
+  for i = #lines, math.max(2, last_marker(lines)), -1 do
     if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
       return i
     end

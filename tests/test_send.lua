@@ -77,10 +77,8 @@ end
 T["probe()"] = MiniTest.new_set({
   parametrize = {
     { "a slash command", "/copy", "/copy" },
-    { "the last word", "!echo duet-ok", "duet-ok" },
-    { "trailing spaces", "fix the bug  ", "bug" },
-    { "a long last word, cut", "see " .. string.rep("x", 40), string.rep("x", 16) },
-    { "cut whole characters", string.rep("é", 10), string.rep("é", 8) },
+    { "without whitespace", "fix  the\tbug ", "fixthebug" },
+    { "shell mode", "!echo duet-ok", "!echoduet-ok" },
     { "several lines", "one\ntwo", vim.NIL },
     { "a long text", string.rep("word ", 41), vim.NIL },
   },
@@ -89,6 +87,22 @@ T["probe()"] = MiniTest.new_set({
 T["probe()"]["works"] = function(_, text, want)
   local got = require("duet.send").probe(text)
   eq(got == nil and vim.NIL or got, want)
+end
+
+T["compact()"] = MiniTest.new_set({
+  parametrize = {
+    {
+      "a wrapped, indented box",
+      "❯ see https://example.com/a/\n  long/path",
+      "❯seehttps://example.com/a/long/path",
+    },
+    { "a no-break space", "!\194\160ls", "!ls" },
+    { "keeps other characters", "é\194\169", "é\194\169" },
+  },
+})
+
+T["compact()"]["works"] = function(_, text, want)
+  eq(require("duet.send").compact(text), want)
 end
 
 T["chunks()"]["joins back to the input"] = function()
@@ -546,6 +560,36 @@ S["does not take a redraw for the paste"] = function()
   ]])
   eq(child.lua_get("_G.wait_done(1)"), { "ok" })
   eq(child.lua_get("_G.seen[2]"), { "\r", "> /copy" })
+end
+
+S["does not take a placeholder that shares a word for the paste"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    -- The box redraws its placeholder (which holds "test") at once, and shows the paste
+    -- 300 ms later. After Enter, it goes back to the placeholder.
+    local placeholder = '> Try "write a test for it"'
+    _G.box = placeholder
+    _G.read_input = function() return _G.box end
+    _G.at = {}
+    local chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data)
+      chan_send(chan, data)
+      table.insert(_G.at, vim.uv.now())
+      if data == "\r" then
+        vim.defer_fn(function() _G.box = placeholder end, 100)
+      else
+        _G.box = placeholder .. " "
+        vim.defer_fn(function() _G.box = "> add a test" end, 300)
+      end
+    end
+    _G.send("add a test")
+    _G.send("add a test")
+  ]])
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  eq(child.lua_get("{ _G.seen[2][2], _G.seen[4][2] }"), { "> add a test", "> add a test" })
+  -- The box went back to its placeholder: no need to wait out the settle time.
+  eq(child.lua_get("_G.at[3] - _G.at[2] < 1000"), true)
 end
 
 S["waits the whole settle time when the paste showed late"] = function()
