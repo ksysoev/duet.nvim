@@ -179,11 +179,10 @@ end
 ---this is only tried when the whole token is not a file, and a bare name without an
 ---extension or `/` does not count.
 ---@param token string
----@param marked boolean
 ---@param exists fun(path: string): boolean
 ---@return { path: string, line: integer }|nil
 ---@return integer|nil used bytes of `token` the reference takes, up to its line number
-local function context_ref(token, marked, exists)
+local function context_ref(token, exists)
   local init = 1
   while true do
     local s, e, num = token:find("%-(%d+)%-", init)
@@ -191,7 +190,7 @@ local function context_ref(token, marked, exists)
       return nil
     end
     local path = token:sub(1, s - 1)
-    if path ~= "" and not path:find("://", 1, true) and plausible(path, marked, false) and exists(path) then
+    if path ~= "" and not path:find("://", 1, true) and plausible(path, false, false) and exists(path) then
       return { path = path, line = tonumber(num) }, e - 1
     end
     init = s + 1
@@ -229,7 +228,7 @@ function M.parse(line, opts)
       if trimmed ~= "" then
         ref, used = M.parse_ref(trimmed, at or backticked)
         if exists and not (ref and exists(ref.path)) then
-          local context, context_used = context_ref(trimmed, at or backticked, exists)
+          local context, context_used = context_ref(trimmed, exists)
           if context then
             ref, used = context, context_used
           end
@@ -357,17 +356,21 @@ end
 
 ---Whether `token`, the joined text of a reference across a full row `head` and the next
 ---row, was one word wrapped rather than two. With no indent, the terminal wrapped the
----line, which it does mid-text, so the row must fill the width (a wide character may not
----fit the last cell). An indent means a TUI wrapped it: that breaks at a space unless the
----word is too wide for a row, so the reference must be.
+---line, which it does mid-text, so the row must fill the width: one cell short only when
+---the next row starts with a wide character, which did not fit in the last cell. A row
+---that fills the width and then ends is indistinguishable from it. An indent means a TUI
+---wrapped it: that breaks at a space unless the word is too wide for a row, so the
+---reference must be.
 ---@param head string
 ---@param indent string
+---@param rest string the next row after its indent
 ---@param token string
 ---@param width integer
 ---@return boolean
-local function one_word(head, indent, token, width)
+local function one_word(head, indent, rest, token, width)
   if indent == "" then
-    return vim.fn.strdisplaywidth(head) >= width - 1
+    local cells = vim.fn.strdisplaywidth(head)
+    return cells == width or (cells == width - 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, 1)) == 2)
   end
   return vim.fn.strdisplaywidth(token) > width - vim.fn.strdisplaywidth(indent)
 end
@@ -416,7 +419,7 @@ function M.find(lines, opts)
       for _, link in ipairs(M.parse(joined, parse_opts)) do
         local abs = link.s <= #head
           and link.e > #head
-          and one_word(head, indent, joined:sub(link.s, link.e), opts.width)
+          and one_word(head, indent, rest, joined:sub(link.s, link.e), opts.width)
           and resolve(link.path)
         if abs then
           local tail_e = link.e - #head + #indent
@@ -655,8 +658,13 @@ function M.at_cursor(win)
       return link
     end
   end
-  -- Say why a reference under the cursor is not a link.
-  for _, link in ipairs(M.parse(get_line(buf, row))) do
+  -- Say why a reference under the cursor is not a link. Parsed as find() does, the text
+  -- of a grep context line is not part of its reference.
+  local exists = function(path)
+    local abs = M.resolve(path, cwd)
+    return abs ~= nil and is_file(abs)
+  end
+  for _, link in ipairs(M.parse(get_line(buf, row), { exists = exists })) do
     if link.s <= col and col <= link.e then
       local _, err = M.resolve(link.path, cwd)
       return nil, err or NO_LINK

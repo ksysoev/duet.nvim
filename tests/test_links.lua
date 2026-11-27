@@ -111,6 +111,7 @@ T["parse() with exists"] = MiniTest.new_set({
     { "hyphen form of a missing file", "docs/x-1-y.md", { link("docs/x-1-y.md", 1, 13) } },
     -- Without an extension or a `/`, the part before the number is too likely a word.
     { "bare name in a context line", "Makefile-3-all:", {} },
+    { "bare name in backticks", "`Makefile-3-all`", { link("Makefile-3-all", 2, 15) } },
     { "match lines come first", "a.lua:3:x-1-y", { link("a.lua", 1, 7, { line = 3 }) } },
     { "context line with colons in its text", "a.lua-4-x:5:y", { link("a.lua", 1, 7, { line = 4 }) } },
   },
@@ -194,6 +195,12 @@ T["find()"] = MiniTest.new_set({
       { "  see lua/a.lua:1", "  2 tests" },
       17,
       { found("lua/a.lua", 1, 7, 17, { line = 1 }) },
+    },
+    {
+      "a row a cell short that ends with a link",
+      { "see lua/a.lua:1", "2. next" },
+      16,
+      { found("lua/a.lua", 1, 5, 15, { line = 1 }) },
     },
     {
       "a terminal wrap in a row a cell short",
@@ -448,7 +455,11 @@ T["terminal"]["gf opens a grep context line at its line"] = function()
   child.type_keys("gf")
   local at = child.lua_get("where()")
   eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 13 })
-  child.lua("vim.cmd.wincmd('p'); cursor_on('my-file')")
+  -- On the text after the line number, <CR> moves down as it does on plain text.
+  child.lua("vim.cmd.wincmd('p'); cursor_on('1-line 11')")
+  child.type_keys("2l", "<CR>")
+  eq(child.lua_get("{ where().terminal, _G.notes }"), { true, {} })
+  child.lua("cursor_on('my-file')")
   child.type_keys("gf")
   eq(rel(child.lua_get("where().name")), "my-file-12-notes.md")
 end

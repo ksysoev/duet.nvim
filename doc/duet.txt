@@ -819,6 +819,9 @@ runs in). To turn it on or off regardless: >lua
 <
 
 Limits: a reference that wraps over more than two rows is not recognized.
+A line that fills the terminal's width exactly looks the same as one that
+wraps, so a reference at its end is joined with a next line that goes on
+it, e.g. digits that extend its line number.
 Paths with spaces are only recognized as OSC 8 targets or `file://` URIs
 (with `%20`).
 
