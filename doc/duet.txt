@@ -784,7 +784,8 @@ A reference that wraps at the terminal's width, whether the terminal wraps
 it or the agent's TUI does (Claude Code indents what follows), is still one
 link: `gf` works on either half. duet joins a row that fills the width with
 the next row, without its indent, and keeps the joined reference only when
-it names a file that exists.
+it names a file that exists. An indented row is the TUI's: it wraps at
+spaces, so it is joined only for a reference too long to fit on a row.
 
 A relative path is looked up in the session's project root (|duet-terminal|),
 then in the git root that contains it. A reference to a file that does not
@@ -841,7 +842,9 @@ require("duet.links").parse({line}, {opts})
 require("duet.links").find({lines}, {opts})
     The links in the list of rows {lines} that resolve, joining references
     wrapped from one row to the next. {opts} has `resolve`, a function from
-    a path to its absolute path or `nil`; `width`, the terminal's width in
+    a path to its absolute path or `nil`; `is_file`, whether such an
+    absolute path is a regular file (default: asks the filesystem), for
+    grep context lines; `width`, the terminal's width in
     cells (no rows are joined without it); and `first`, the buffer row of
     the first line (default 1). Each link also has `row` and `abs`, and a
     wrapped one `tail = { row, s, e }`, its part on the next row.

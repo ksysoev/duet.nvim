@@ -323,22 +323,53 @@ local function get_line(buf, row)
   return vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
 end
 
--- A row this many cells short of the terminal's width still counts as full: Claude Code
--- breaks its prompt one cell early.
+-- A row this many cells short of the terminal's width still counts as full when the TUI
+-- wrapped it: Claude Code breaks its prompt one cell early.
 local WRAP_SLACK = 2
 
 ---@class duet.links.FindOpts
 ---@field resolve fun(path: string): string|nil the absolute path a link's path refers to
+---@field is_file? fun(abs: string): boolean whether a resolved path is a regular file, for
+---grep context lines (default: asks the filesystem)
 ---@field first? integer buffer row of `lines[1]` (default 1)
 ---@field width? integer the terminal's width in cells; without it, no lines are joined
 
----Whether `text` may go on in the next row: it fills the terminal's width and ends with
----something other than a space.
----@param text string
+---@param abs string
+---@return boolean
+local function is_file(abs)
+  local stat = vim.uv.fs_stat(abs)
+  return stat ~= nil and stat.type == "file"
+end
+
+---Whether row `head` may go on in the next row: it ends with something other than a
+---space and fills the terminal's width, but is not wider (rows from before the terminal
+---was narrowed).
+---@param head string
 ---@param width? integer
 ---@return boolean
-local function wraps(text, width)
-  return width ~= nil and text:find("%S$") ~= nil and vim.fn.strdisplaywidth(text) >= width - WRAP_SLACK
+local function may_wrap(head, width)
+  if not width or not head:find("%S$") then
+    return false
+  end
+  local cells = vim.fn.strdisplaywidth(head)
+  return cells <= width and cells >= width - WRAP_SLACK
+end
+
+---Whether `token`, the joined text of a reference across a full row `head` and the next
+---row, was one word wrapped rather than two. With no indent, the terminal wrapped the
+---line, which it does mid-text, so the row must fill the width (a wide character may not
+---fit the last cell). An indent means a TUI wrapped it: that breaks at a space unless the
+---word is too wide for a row, so the reference must be.
+---@param head string
+---@param indent string
+---@param token string
+---@param width integer
+---@return boolean
+local function one_word(head, indent, token, width)
+  if indent == "" then
+    return vim.fn.strdisplaywidth(head) >= width - 1
+  end
+  return vim.fn.strdisplaywidth(token) > width - vim.fn.strdisplaywidth(indent)
 end
 
 ---The links in `lines` (buffer rows from `opts.first`) that resolve, with `row` and `abs`,
@@ -358,9 +389,11 @@ function M.find(lines, opts)
     end
     return cache[path] or nil
   end
+  local file = opts.is_file or is_file
   local parse_opts = {
     exists = function(path)
-      return resolve(path) ~= nil
+      local abs = resolve(path)
+      return abs ~= nil and file(abs)
     end,
   }
   ---@type duet.Link[][]
@@ -378,9 +411,13 @@ function M.find(lines, opts)
   for i = 1, #lines - 1 do
     local head = lines[i]
     local indent, rest = lines[i + 1]:match("^(%s*)(.*)$")
-    if rest ~= "" and wraps(head, opts.width) then
-      for _, link in ipairs(M.parse(head .. rest, parse_opts)) do
-        local abs = link.s <= #head and link.e > #head and resolve(link.path)
+    if rest ~= "" and may_wrap(head, opts.width) then
+      local joined = head .. rest
+      for _, link in ipairs(M.parse(joined, parse_opts)) do
+        local abs = link.s <= #head
+          and link.e > #head
+          and one_word(head, indent, joined:sub(link.s, link.e), opts.width)
+          and resolve(link.path)
         if abs then
           local tail_e = link.e - #head + #indent
           -- The parts on each row, found on their own, are replaced by the whole.
@@ -816,25 +853,31 @@ end
 function M.jump(dir, count)
   count = count or vim.v.count1
   local win = vim.api.nvim_get_current_win()
-  local links = M.visible(win)
+  local top = visible_rows(win)
+  -- Where the cursor goes on each link: its start, or the part on the next row when the
+  -- start is above the window.
+  local stops = vim.tbl_map(function(link)
+    local part = (link.row < top and link.tail) or link
+    return { row = part.row, s = part.s, e = part.e, link = link }
+  end, M.visible(win))
   local cursor = vim.api.nvim_win_get_cursor(win)
   local row, col = cursor[1], cursor[2] + 1
   local target
   for _ = 1, count do
     local step
     if dir > 0 then
-      for _, link in ipairs(links) do
-        if link.row > row or (link.row == row and link.s > col) then
-          step = link
+      for _, stop in ipairs(stops) do
+        if stop.row > row or (stop.row == row and stop.s > col) then
+          step = stop
           break
         end
       end
     else
-      for i = #links, 1, -1 do
-        local link = links[i]
+      for i = #stops, 1, -1 do
+        local stop = stops[i]
         -- A link the cursor is inside is not the previous one.
-        if (link.row < row or (link.row == row and link.e < col)) and not contains(link, row, col) then
-          step = link
+        if (stop.row < row or (stop.row == row and stop.e < col)) and not contains(stop.link, row, col) then
+          step = stop
           break
         end
       end

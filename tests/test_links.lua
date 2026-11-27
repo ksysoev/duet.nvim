@@ -93,6 +93,9 @@ local FILES = {
   ["lua/duet/some/long/path.lua"] = true,
 }
 
+-- Directories that exist.
+local DIRS = { ["docs/adr"] = true }
+
 local function exists(path)
   return FILES[path] == true
 end
@@ -175,6 +178,31 @@ T["find()"] = MiniTest.new_set({
     },
     { "no width", { "xxxx lua/duet/so", "me/long/path.lua:120" }, false, {} },
     {
+      "a row wider than the terminal, from before it was narrowed",
+      { "xxxx lua/duet/so", "me/long/path.lua:120" },
+      12,
+      {},
+    },
+    {
+      "a terminal wrap at a space after a reference",
+      { "see lua/a.lua:1", " 2 tests" },
+      15,
+      { found("lua/a.lua", 1, 5, 15, { line = 1 }) },
+    },
+    {
+      "a TUI wrap at a space after a reference",
+      { "  see lua/a.lua:1", "  2 tests" },
+      17,
+      { found("lua/a.lua", 1, 7, 17, { line = 1 }) },
+    },
+    {
+      "a terminal wrap in a row a cell short",
+      { "xxxx lua/duet/so", "me/long/path.lua" },
+      18,
+      {},
+    },
+    { "a context line naming a directory", { "docs/adr-0001-use-x.md" }, false, {} },
+    {
       "a wrapped context line",
       { "lua/duet/some/long/pa", "th.lua-9-text" },
       21,
@@ -197,7 +225,10 @@ T["find()"]["finds %s"] = function(_, lines, width, want)
   local got = require("duet.links").find(lines, {
     width = width or nil,
     resolve = function(path)
-      return exists(path) and ("/r/" .. path) or nil
+      return (exists(path) or DIRS[path]) and ("/r/" .. path) or nil
+    end,
+    is_file = function(abs)
+      return exists(abs:sub(4))
     end,
   })
   eq(got, want)
@@ -440,6 +471,15 @@ T["terminal"]["gf works on either half of a wrapped reference"]["the %s"] = func
   child.type_keys("gf")
   local at = child.lua_get("where()")
   eq({ rel(at.name), at.line }, { "lua/duet/init.lua", 25 })
+end
+
+T["terminal"]["[l stays in the window on a wrapped reference"] = function()
+  agent(WRAP:format("lua/duet/init.lua:25"))
+  local row = child.lua_get("cursor_on('after')")
+  -- Only the tail is in the window; the cursor is after it.
+  child.lua("vim.fn.winrestview({ topline = ... }); vim.cmd('normal! $')", { row })
+  child.type_keys("[l")
+  eq(child.lua_get("{ vim.api.nvim_win_get_cursor(0), vim.fn.line('w0') }"), { { row, 0 }, row })
 end
 
 T["terminal"]["highlights both halves of a wrapped reference"] = function()
