@@ -74,6 +74,23 @@ T["chunks()"]["works"] = function(_, data, size, want)
   eq(require("duet.send").chunks(data, size), want)
 end
 
+T["probe()"] = MiniTest.new_set({
+  parametrize = {
+    { "a slash command", "/copy", "/copy" },
+    { "the last word", "!echo duet-ok", "duet-ok" },
+    { "trailing spaces", "fix the bug  ", "bug" },
+    { "a long last word, cut", "see " .. string.rep("x", 40), string.rep("x", 16) },
+    { "cut whole characters", string.rep("é", 10), string.rep("é", 8) },
+    { "several lines", "one\ntwo", vim.NIL },
+    { "a long text", string.rep("word ", 41), vim.NIL },
+  },
+})
+
+T["probe()"]["works"] = function(_, text, want)
+  local got = require("duet.send").probe(text)
+  eq(got == nil and vim.NIL or got, want)
+end
+
 T["chunks()"]["joins back to the input"] = function()
   local send = require("duet.send")
   local parts = {}
@@ -490,16 +507,71 @@ S["goes on when the input does not change after Enter"] = function()
   eq(child.lua_get("_G.at[3] - _G.at[2] >= 300"), true)
 end
 
-S["does not hang when read_input fails"] = function()
+S["sends without waiting when read_input fails"] = function()
   fake()
   with_read_input()
   child.lua([[
-    require("duet.send").SUBMIT_GRACE_MS = 200
     _G.read_input = function() error("boom") end
+    _G.t0 = vim.uv.now()
     _G.send("x")
+    _G.send("y")
+  ]])
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  local want = P .. "x" .. E .. "\r" .. P .. "y" .. E .. "\r"
+  eq(wait_out(want), want)
+  -- Neither the grace time nor the settle time was waited out.
+  eq(child.lua_get("vim.uv.now() - _G.t0 < 1500"), true)
+end
+
+S["does not take a redraw for the paste"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    -- Once the paste is written, the box first redraws with other text, then shows the
+    -- paste 300 ms later.
+    _G.box = "> "
+    _G.read_input = function() return _G.box end
+    local chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data)
+      -- Written (and recorded in _G.seen) before the box changes.
+      chan_send(chan, data)
+      if data == "\r" then
+        _G.box = "> "
+      else
+        _G.box = '> Try "something"'
+        vim.defer_fn(function() _G.box = "> /copy" end, 300)
+      end
+    end
+    _G.send("/copy")
   ]])
   eq(child.lua_get("_G.wait_done(1)"), { "ok" })
-  eq(wait_out(P .. "x" .. E .. "\r"), P .. "x" .. E .. "\r")
+  eq(child.lua_get("_G.seen[2]"), { "\r", "> /copy" })
+end
+
+S["waits the whole settle time when the paste showed late"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    local send = require("duet.send")
+    send.SUBMIT_GRACE_MS, send.SUBMIT_SETTLE_MS = 200, 600
+    -- The box shows each paste 400 ms after it is written (after the grace time), and
+    -- never clears it.
+    _G.box = "> "
+    _G.read_input = function() return _G.box end
+    _G.at = {}
+    local chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data)
+      table.insert(_G.at, vim.uv.now())
+      if data ~= "\r" then
+        vim.defer_fn(function() _G.box = "> " .. data end, 400)
+      end
+      return chan_send(chan, data)
+    end
+    _G.send("one")
+    _G.send("two")
+  ]])
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  eq(child.lua_get("_G.at[3] - _G.at[2] >= 600"), true)
 end
 
 S["shows a hidden agent that is asking something"] = function()

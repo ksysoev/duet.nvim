@@ -544,13 +544,14 @@ Fields:
                   something, so define it for any agent with a TUI.
 - `read_input`    (optional) `fun(self, lines): string|nil`: the agent's
                   input box as shown in its terminal (given as its last
-                  lines), or `nil` if no input box is on screen. duet only
-                  compares what it returns from one moment to the next, so
-                  it can be the box's raw lines, placeholder included. With
-                  it, a send presses <Enter> once the paste shows in the
-                  box, and the next send waits until <Enter> has been taken
-                  in (the box changes), so two sends can't merge into one
-                  message (see |duet-send|).
+                  lines), or `nil` if no input box is on screen. It can be
+                  the box's raw lines, placeholder included: duet only
+                  compares it from one moment to the next, and looks in it
+                  for the last word of a short one-line text. With it, a
+                  send presses <Enter> once the paste shows in the box, and
+                  the next send waits until <Enter> has been taken in (the
+                  box changed and no longer shows the text), so two sends
+                  can't merge into one message (see |duet-send|).
 - `format_ref`    (optional) `fun(self, path, range?): string`: how to
                   refer to a file in a prompt (|duet-context|). `path` is
                   relative to the project; `range` is `{ first, last }`
