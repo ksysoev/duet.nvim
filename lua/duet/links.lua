@@ -15,6 +15,8 @@ local M = {}
 ---@field e integer 1-based byte column where it ends (inclusive)
 ---@field row? integer 1-based buffer row, set by the buffer functions
 ---@field abs? string absolute path, set once resolved
+---@field tail? { row: integer, s: integer, e: integer } the part of a reference wrapped
+---onto the next row; `s` and `e` then end the part on `row`
 
 local FLASH_MS = 300
 local NO_LINK = "links: no file link under the cursor"
@@ -172,13 +174,42 @@ function M.parse_ref(token, marked)
   return { path = path, line = line, end_line = end_line, col = col }, used
 end
 
+---A grep or ripgrep context line, `a.lua-12-text`: the path before the first `-N-` that
+---looks like a file and exists. Hyphens are common in names (`my-file-12-notes.md`), so
+---this is only tried when the whole token is not a file, and a bare name without an
+---extension or `/` does not count.
+---@param token string
+---@param exists fun(path: string): boolean
+---@return { path: string, line: integer }|nil
+---@return integer|nil used bytes of `token` the reference takes, up to its line number
+local function context_ref(token, exists)
+  local init = 1
+  while true do
+    local s, e, num = token:find("%-(%d+)%-", init)
+    if not s then
+      return nil
+    end
+    local path = token:sub(1, s - 1)
+    if path ~= "" and not path:find("://", 1, true) and plausible(path, false, false) and exists(path) then
+      return { path = path, line = tonumber(num) }, e - 1
+    end
+    init = s + 1
+  end
+end
+
+---@class duet.links.ParseOpts
+---@field exists? fun(path: string): boolean whether a path is a file; with it, grep
+---context lines (`a.lua-12-text`) are recognized too
+
 ---Find the file references in a line of text, e.g. `lua/duet/init.lua:10`,
 ---`a.go:12:3`, `a.lua:L10-L20`, `a.lua#L10`, `@a.lua (lines 3-5)`, `` `Makefile` ``,
 ---`File "a.py", line 10` or `file:///abs/a.lua#L3`. URLs are skipped. Candidates are not
----checked against the filesystem: see resolve().
+---checked against the filesystem (see resolve()), except through `opts.exists`.
 ---@param line string
+---@param opts? duet.links.ParseOpts
 ---@return duet.Link[] links in order of appearance
-function M.parse(line)
+function M.parse(line, opts)
+  local exists = opts and opts.exists
   local links = {}
   local scan = blank_symbols(line)
   local last_e = 0
@@ -196,6 +227,12 @@ function M.parse(line)
       local ref, used
       if trimmed ~= "" then
         ref, used = M.parse_ref(trimmed, at or backticked)
+        if exists and not (ref and exists(ref.path)) then
+          local context, context_used = context_ref(trimmed, exists)
+          if context then
+            ref, used = context, context_used
+          end
+        end
       end
       if ref and used and used < #trimmed then
         te = ts + used - 1 -- `a.lua:12:text`: the text after the location is not part of it
@@ -242,27 +279,40 @@ end
 ---@return string|nil abs normalized absolute path
 ---@return string|nil err
 function M.resolve(path, cwd)
-  local expanded = path
-  if path == "~" or vim.startswith(path, "~/") then
-    expanded = vim.fs.normalize(path)
-  end
-  local candidates = {}
-  if vim.startswith(expanded, "/") then
-    candidates[1] = expanded
-  else
-    cwd = vim.fs.normalize(vim.fs.abspath(cwd or vim.uv.cwd() or "."))
-    candidates[1] = vim.fs.joinpath(cwd, expanded)
-    local root = require("duet.util").git_root(cwd)
-    if root and root ~= cwd then
-      candidates[2] = vim.fs.joinpath(root, expanded)
+  return M.resolver(cwd)(path)
+end
+
+---A resolve() for many paths from one `cwd`: the git root is looked up once, when the
+---first path needs it.
+---@param cwd? string default: the current working directory
+---@return fun(path: string): string|nil, string|nil
+function M.resolver(cwd)
+  local base, root
+  return function(path)
+    local expanded = path
+    if path == "~" or vim.startswith(path, "~/") then
+      expanded = vim.fs.normalize(path)
     end
-  end
-  for _, candidate in ipairs(candidates) do
-    if vim.uv.fs_stat(candidate) then
-      return vim.fs.normalize(candidate), nil
+    local candidates = {}
+    if vim.startswith(expanded, "/") then
+      candidates[1] = expanded
+    else
+      if not base then
+        base = vim.fs.normalize(vim.fs.abspath(cwd or vim.uv.cwd() or "."))
+        root = require("duet.util").git_root(base) or false
+      end
+      candidates[1] = vim.fs.joinpath(base, expanded)
+      if root and root ~= base then
+        candidates[2] = vim.fs.joinpath(root, expanded)
+      end
     end
+    for _, candidate in ipairs(candidates) do
+      if vim.uv.fs_stat(candidate) then
+        return vim.fs.normalize(candidate), nil
+      end
+    end
+    return nil, ("links: no such file '%s'"):format(path)
   end
-  return nil, ("links: no such file '%s'"):format(path)
 end
 
 -- Buffers --------------------------------------------------------------------
@@ -285,26 +335,182 @@ local function get_line(buf, row)
   return vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
 end
 
----Links in `lines` (starting at buffer row `first`) that resolve, with `row` and `abs`.
+-- A row this many cells short of the terminal's width still counts as full when the TUI
+-- wrapped it: Claude Code breaks its prompt one cell early.
+local WRAP_SLACK = 1
+
+---@class duet.links.FindOpts
+---@field resolve fun(path: string): string|nil the absolute path a link's path refers to
+---@field is_file? fun(abs: string): boolean whether a resolved path is a regular file, for
+---grep context lines (default: asks the filesystem)
+---@field first? integer buffer row of `lines[1]` (default 1)
+---@field width? integer the terminal's width in cells; without it, no lines are joined
+
+---@param abs string
+---@return boolean
+local function is_file(abs)
+  local stat = vim.uv.fs_stat(abs)
+  return stat ~= nil and stat.type == "file"
+end
+
+---Whether row `head`, without its trailing spaces, may go on in the next row: it fills
+---the terminal's width, but is not wider (rows from before the terminal was narrowed).
+---@param head string
+---@param width? integer
+---@return boolean
+local function may_wrap(head, width)
+  if not width or head == "" then
+    return false
+  end
+  local cells = vim.fn.strdisplaywidth(head)
+  return cells <= width and cells >= width - WRAP_SLACK
+end
+
+---Whether `token`, the joined text of a reference across a full row `head` and the next
+---row, was one word wrapped rather than two. With no indent, the terminal wrapped the
+---line, which it does mid-text, so the row must fill the width: one cell short only when
+---the next row starts with a wide character, which did not fit in the last cell. A row
+---that fills the width and then ends is indistinguishable from it. An indent means a TUI
+---wrapped it: that breaks at a space unless the word is too wide for a row, so the
+---reference must be.
+---@param head string
+---@param indent string
+---@param rest string the next row after its indent
+---@param token string
+---@param width integer
+---@return boolean
+local function one_word(head, indent, rest, token, width)
+  if indent == " " then
+    return false -- text the terminal wrapped, not an indent: TUIs indent by two or more
+  end
+  if indent == "" then
+    local cells = vim.fn.strdisplaywidth(head)
+    return cells == width or (cells == width - 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, 1)) == 2)
+  end
+  return vim.fn.strdisplaywidth(token) > width - vim.fn.strdisplaywidth(indent)
+end
+
+---The links in `lines` (buffer rows from `opts.first`) that resolve, with `row` and `abs`,
+---in order. A reference wrapped at the terminal's width (libvterm wraps long lines, and a
+---TUI such as Claude Code wraps its text and indents what follows) is found by joining a
+---full row with the next one, without its indent. Joined, it counts only if it resolves;
+---its part on the next row is in `tail`.
 ---@param lines string[]
----@param first integer
----@param cwd string
+---@param opts duet.links.FindOpts
 ---@return duet.Link[]
-local function resolved_links(lines, first, cwd)
+function M.find(lines, opts)
+  local first = opts.first or 1
   local cache = {}
-  local found = {}
-  for i, text in ipairs(lines) do
-    for _, link in ipairs(M.parse(text)) do
-      if cache[link.path] == nil then
-        cache[link.path] = M.resolve(link.path, cwd) or false
+  local function resolve(path)
+    if cache[path] == nil then
+      cache[path] = opts.resolve(path) or false
+    end
+    return cache[path] or nil
+  end
+  local files = {}
+  local parse_opts = {
+    exists = function(path)
+      local abs = resolve(path)
+      if abs and files[abs] == nil then
+        files[abs] = (opts.is_file or is_file)(abs)
       end
-      if cache[link.path] then
-        link.row, link.abs = first + i - 1, cache[link.path]
-        found[#found + 1] = link
+      return abs ~= nil and files[abs]
+    end,
+  }
+  ---@type duet.Link[][]
+  local rows = {}
+  for i, text in ipairs(lines) do
+    rows[i] = {}
+    for _, link in ipairs(M.parse(text, parse_opts)) do
+      link.abs = resolve(link.path)
+      if link.abs then
+        link.row = first + i - 1
+        table.insert(rows[i], link)
       end
     end
   end
+  -- A TUI pads the rows it draws with spaces, which the terminal keeps in the buffer.
+  local trimmed = vim.tbl_map(function(text)
+    return (text:gsub("%s+$", ""))
+  end, lines)
+  for i = 1, #lines - 1 do
+    local head = trimmed[i]
+    local indent, rest = trimmed[i + 1]:match("^(%s*)(.*)$")
+    if rest ~= "" and may_wrap(head, opts.width) then
+      local joined = head .. rest
+      for _, link in ipairs(M.parse(joined, parse_opts)) do
+        local abs = link.s <= #head
+          and link.e > #head
+          and one_word(head, indent, rest, joined:sub(link.s, link.e), opts.width)
+          and resolve(link.path)
+        local tail_e = link.e - #head + #indent
+        -- A tail that fills its row too may go on in a third row: not recognized.
+        local cut = tail_e == #trimmed[i + 1] and lines[i + 2] ~= nil and may_wrap(trimmed[i + 1], opts.width)
+        if abs and not cut then
+          -- The parts on each row, found on their own, are replaced by the whole.
+          rows[i] = vim.tbl_filter(function(other)
+            return other.e < link.s
+          end, rows[i])
+          rows[i + 1] = vim.tbl_filter(function(other)
+            return other.s > tail_e
+          end, rows[i + 1])
+          link.row, link.e, link.abs = first + i - 1, #head, abs
+          link.tail = { row = first + i, s = #indent + 1, e = tail_e }
+          table.insert(rows[i], link)
+        end
+      end
+    end
+  end
+  local found = {}
+  for _, row in ipairs(rows) do
+    vim.list_extend(found, row)
+  end
   return found
+end
+
+---Whether a (1-based row, 1-based byte col) position is on a link, or its wrapped tail.
+---@param link duet.Link
+---@param row integer
+---@param col integer
+---@return boolean
+local function contains(link, row, col)
+  local tail = link.tail
+  return (link.row == row and link.s <= col and col <= link.e)
+    or (tail ~= nil and tail.row == row and tail.s <= col and col <= tail.e)
+end
+
+---The width of the terminal in `buf`: Neovim sizes it to the widest window showing it.
+---Nil for other buffers, whose lines do not wrap.
+---@param buf integer
+---@return integer|nil
+local function term_width(buf)
+  if vim.bo[buf].buftype ~= "terminal" then
+    return nil
+  end
+  local width
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    local cells = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
+    width = math.max(width or 0, cells)
+  end
+  return width
+end
+
+---Links that resolve in rows `first` to `last` of `buf`, including those that wrap into
+---the range from the row above or out of it into the row below.
+---@param buf integer
+---@param first integer
+---@param last integer
+---@param cwd string
+---@return duet.Link[]
+local function resolved_links(buf, first, last, cwd)
+  local from = math.max(first - 1, 1)
+  local to = math.min(last + 1, vim.api.nvim_buf_line_count(buf))
+  local lines = vim.api.nvim_buf_get_lines(buf, from - 1, to, false)
+  local links = M.find(lines, { first = from, width = term_width(buf), resolve = M.resolver(cwd) })
+  return vim.tbl_filter(function(link)
+    local tail = link.tail
+    return (link.row >= first and link.row <= last) or (tail ~= nil and tail.row >= first and tail.row <= last)
+  end, links)
 end
 
 ---Text of the buffer between two (0-based row, 0-based col) positions on one row.
@@ -465,14 +671,22 @@ function M.at_cursor(win)
   if osc8 then
     return osc8
   end
-  for _, link in ipairs(M.parse(get_line(buf, row))) do
-    if link.s <= col and col <= link.e then
-      local abs, err = M.resolve(link.path, cwd)
-      if not abs then
-        return nil, err
-      end
-      link.row, link.abs = row, abs
+  for _, link in ipairs(resolved_links(buf, row, row, cwd)) do
+    if contains(link, row, col) then
       return link
+    end
+  end
+  -- Say why a reference under the cursor is not a link. Parsed as find() does, the text
+  -- of a grep context line is not part of its reference.
+  local resolve = M.resolver(cwd)
+  local exists = function(path)
+    local abs = resolve(path)
+    return abs ~= nil and is_file(abs)
+  end
+  for _, link in ipairs(M.parse(get_line(buf, row), { exists = exists })) do
+    if link.s <= col and col <= link.e then
+      local _, err = resolve(link.path)
+      return nil, err or NO_LINK
     end
   end
   return nil, NO_LINK
@@ -496,8 +710,7 @@ function M.visible(win)
   win = win or vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_win_get_buf(win)
   local first, last = visible_rows(win)
-  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
-  return resolved_links(lines, first, M.cwd(buf))
+  return resolved_links(buf, first, last, M.cwd(buf))
 end
 
 -- Opening --------------------------------------------------------------------
@@ -667,25 +880,31 @@ end
 function M.jump(dir, count)
   count = count or vim.v.count1
   local win = vim.api.nvim_get_current_win()
-  local links = M.visible(win)
+  local top = visible_rows(win)
+  -- Where the cursor goes on each link: its start, or the part on the next row when the
+  -- start is above the window.
+  local stops = vim.tbl_map(function(link)
+    local part = (link.row < top and link.tail) or link
+    return { row = part.row, s = part.s, e = part.e, link = link }
+  end, M.visible(win))
   local cursor = vim.api.nvim_win_get_cursor(win)
   local row, col = cursor[1], cursor[2] + 1
   local target
   for _ = 1, count do
     local step
     if dir > 0 then
-      for _, link in ipairs(links) do
-        if link.row > row or (link.row == row and link.s > col) then
-          step = link
+      for _, stop in ipairs(stops) do
+        if stop.row > row or (stop.row == row and stop.s > col) then
+          step = stop
           break
         end
       end
     else
-      for i = #links, 1, -1 do
-        local link = links[i]
+      for i = #stops, 1, -1 do
+        local stop = stops[i]
         -- A link the cursor is inside is not the previous one.
-        if link.row < row or (link.row == row and link.e < col) then
-          step = link
+        if (stop.row < row or (stop.row == row and stop.e < col)) and not contains(stop.link, row, col) then
+          step = stop
           break
         end
       end
@@ -717,10 +936,12 @@ function M.highlight(buf)
   vim.api.nvim_buf_clear_namespace(buf, hl_ns, 0, -1)
   for _, win in ipairs(vim.fn.win_findbuf(buf)) do
     for _, link in ipairs(M.visible(win)) do
-      pcall(vim.api.nvim_buf_set_extmark, buf, hl_ns, link.row - 1, link.s - 1, {
-        end_col = link.e,
-        hl_group = "DuetLink",
-      })
+      for _, part in ipairs({ link, link.tail }) do
+        pcall(vim.api.nvim_buf_set_extmark, buf, hl_ns, part.row - 1, part.s - 1, {
+          end_col = part.e,
+          hl_group = "DuetLink",
+        })
+      end
     end
   end
 end
