@@ -18,7 +18,12 @@ M.CHUNK_SIZE = 4096
 -- How long the agent may look not ready when Enter is due before duet takes it for a
 -- dialog: a redraw, e.g. after a large paste, can leave the input box off screen for a
 -- while. A real dialog only makes the send fail later.
+-- It is also how long the agent may take to show the paste in its input box (with an
+-- adapter that has `read_input`) before duet presses Enter anyway.
 M.SUBMIT_GRACE_MS = 2000
+-- With an adapter that has `read_input`: how long the agent may take to show that it took
+-- Enter in (its input box changes) before the next send goes on anyway.
+M.SUBMIT_SETTLE_MS = 2000
 
 ---@class duet.SendOpts
 ---@field submit? boolean press Enter after the paste (default: true)
@@ -189,26 +194,72 @@ local function process(session)
     end
     local writes = M.writes(item.text)
     require("duet.log").debug("session %s: sending %d bytes in %d writes", session.id, #item.text, #writes)
+    -- With an adapter that reads the input box, the box before the paste, to tell when the
+    -- agent has taken the paste in.
+    local before = session:input()
+    local function pasted()
+      return not session.agent.read_input or session:input() ~= before
+    end
     local i = 0
-    local function submit()
-      -- The agent may have started asking something (a permission dialog) since the
-      -- paste: Enter would answer it. Leave the text in its input instead, and drop the
-      -- sends queued after it, which would be pasted after it and submitted with it.
-      session:when_ready(M.SUBMIT_GRACE_MS, function(submit_err, timed_out)
-        if timed_out then
-          reveal(session)
-          fail(("send: %s is asking something: the text was pasted but not submitted"):format(session.agent.name))
-          return
-        elseif submit_err then
-          fail(submit_err)
-          return
+    local function press_enter()
+      local shown = session:input()
+      local ok, err = write(session, M.SUBMIT)
+      if not ok then
+        fail(err)
+        return
+      end
+      if not session.agent.read_input then
+        done()
+        return
+      end
+      -- Wait until the agent has taken Enter in: the box shows something else. Until it
+      -- does, a paste would land in the text being submitted (Claude Code submits a slash
+      -- command after a moment, more so while it starts). An error means the agent is
+      -- gone: the text was submitted, and the next item reports it.
+      session:poll(M.SUBMIT_SETTLE_MS, function()
+        local now, input_err = session:input()
+        if input_err then
+          return nil, input_err
         end
-        local ok, err = write(session, M.SUBMIT)
-        if not ok then
-          fail(err)
-          return
+        return now ~= nil and now ~= shown
+      end, function(_, timed_out)
+        if timed_out then
+          require("duet.log").debug("session %s: the input did not change after Enter", session.id)
         end
         done()
+      end)
+    end
+    local function submit()
+      -- Wait until the agent shows the paste in its input: Enter before it has taken the
+      -- paste in would be checked against an old screen. The agent may also have started
+      -- asking something (a permission dialog) since the paste: Enter would answer it.
+      -- Leave the text in its input instead, and drop the sends queued after it, which
+      -- would be pasted after it and submitted with it.
+      session:poll(M.SUBMIT_GRACE_MS, function()
+        local ready, check_err = session:is_ready()
+        if not ready then
+          return ready, check_err
+        end
+        return pasted()
+      end, function(poll_err, timed_out)
+        if poll_err then
+          fail(poll_err)
+          return
+        elseif timed_out then
+          local ready, check_err = session:is_ready()
+          if check_err then
+            fail(check_err)
+            return
+          elseif not ready then
+            reveal(session)
+            fail(("send: %s is asking something: the text was pasted but not submitted"):format(session.agent.name))
+            return
+          end
+          -- Ready, but the paste never showed: press Enter anyway, as for an agent
+          -- whose input duet can't read.
+          require("duet.log").debug("session %s: the paste did not show in the input", session.id)
+        end
+        press_enter()
       end)
     end
     local function write_next()

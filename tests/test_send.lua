@@ -394,6 +394,114 @@ S["submits a slash command while Claude Code's command menu is open"] = function
   eq(child.lua_get("_G.saw_menu"), true)
 end
 
+-- Give the fake agent a read_input: the last line that starts with ">", its input box.
+-- Each write records what that box showed when it was written, in _G.seen.
+local function with_read_input()
+  child.lua([[
+    local base = require("duet.agents").get("fake")
+    _G.read_input = function(_, lines)
+      for i = #lines, 1, -1 do
+        if vim.startswith(lines[i], ">") then
+          return lines[i]
+        end
+      end
+      return nil
+    end
+    require("duet.agents").register({
+      name = "fake",
+      cmd = base.cmd,
+      capabilities = base.capabilities,
+      launch = base.launch,
+      is_ready = base.is_ready,
+      read_input = function(...)
+        return _G.read_input(...)
+      end,
+    })
+    _G.seen = {}
+    local chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data)
+      local s = require("duet.terminal").list()[1]
+      table.insert(_G.seen, { data, s and s:input() or vim.NIL })
+      return chan_send(chan, data)
+    end
+  ]])
+end
+
+S["waits for the agent to show the paste and take Enter in"] = function()
+  -- An agent slow to draw, as Claude Code is while it starts: it shows each paste in its
+  -- input box (the last ">" line) 0.4 s after reading it, and clears the box 0.4 s after
+  -- reading Enter.
+  local paste = #(P .. "/copy" .. E)
+  local step = (
+    [[dd bs=1 count=%d >> "$OUT" 2>/dev/null; sleep 0.4; printf '> /copy\r\n'; ]]
+    .. [[dd bs=1 count=1 >> "$OUT" 2>/dev/null; sleep 0.4; printf '>\r\n']]
+  ):format(paste)
+  fake(([[stty raw -echo; printf 'READY\r\n>\r\n'; %s; %s; exec cat >> "$OUT"]]):format(step, step))
+  with_read_input()
+  child.lua("_G.send('/copy'); _G.send('/copy')")
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  local want = P .. "/copy" .. E .. "\r" .. P .. "/copy" .. E .. "\r"
+  eq(wait_out(want), want)
+  -- Enter went in once the paste showed, and the next paste once the box was cleared.
+  eq(child.lua_get("_G.seen"), {
+    { P .. "/copy" .. E, ">" },
+    { "\r", "> /copy" },
+    { P .. "/copy" .. E, ">" },
+    { "\r", "> /copy" },
+  })
+end
+
+S["presses Enter anyway when the paste never shows"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    require("duet.send").SUBMIT_GRACE_MS = 200
+    _G.read_input = function() return "> unchanged" end
+    _G.send("x")
+  ]])
+  eq(child.lua_get("_G.wait_done(1)"), { "ok" })
+  eq(wait_out(P .. "x" .. E .. "\r"), P .. "x" .. E .. "\r")
+end
+
+S["goes on when the input does not change after Enter"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    require("duet.send").SUBMIT_SETTLE_MS = 300
+    -- The box shows each paste, and keeps it after Enter.
+    _G.box = "> "
+    _G.read_input = function() return _G.box end
+    local chan_send = vim.api.nvim_chan_send
+    _G.at = {}
+    vim.api.nvim_chan_send = function(chan, data)
+      table.insert(_G.at, vim.uv.now())
+      if data ~= "\r" then
+        _G.box = "> " .. data
+      end
+      return chan_send(chan, data)
+    end
+    _G.send("one")
+    _G.send("two")
+  ]])
+  eq(child.lua_get("_G.wait_done(2)"), { "ok", "ok" })
+  local want = P .. "one" .. E .. "\r" .. P .. "two" .. E .. "\r"
+  eq(wait_out(want), want)
+  -- The second paste waited for the settle time after the first Enter.
+  eq(child.lua_get("_G.at[3] - _G.at[2] >= 300"), true)
+end
+
+S["does not hang when read_input fails"] = function()
+  fake()
+  with_read_input()
+  child.lua([[
+    require("duet.send").SUBMIT_GRACE_MS = 200
+    _G.read_input = function() error("boom") end
+    _G.send("x")
+  ]])
+  eq(child.lua_get("_G.wait_done(1)"), { "ok" })
+  eq(wait_out(P .. "x" .. E .. "\r"), P .. "x" .. E .. "\r")
+end
+
 S["shows a hidden agent that is asking something"] = function()
   fake()
   child.lua([[

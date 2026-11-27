@@ -542,6 +542,15 @@ Fields:
                   as a permission prompt. Without it, duet sends text as
                   soon as the agent runs and can't tell when it is asking
                   something, so define it for any agent with a TUI.
+- `read_input`    (optional) `fun(self, lines): string|nil`: the agent's
+                  input box as shown in its terminal (given as its last
+                  lines), or `nil` if no input box is on screen. duet only
+                  compares what it returns from one moment to the next, so
+                  it can be the box's raw lines, placeholder included. With
+                  it, a send presses <Enter> once the paste shows in the
+                  box, and the next send waits until <Enter> has been taken
+                  in (the box changes), so two sends can't merge into one
+                  message (see |duet-send|).
 - `format_ref`    (optional) `fun(self, path, range?): string`: how to
                   refer to a file in a prompt (|duet-context|). `path` is
                   relative to the project; `range` is `{ first, last }`
@@ -640,6 +649,12 @@ session:when_ready({timeout_ms}, {cb})
     agent is not ready after {timeout_ms} milliseconds, or exits or is
     stopped first. `session:is_ready()` answers the same question now.
 
+                                                          *duet-session-input*
+session:input()
+    What the agent's input box holds now, as its adapter's `read_input`
+    reads it from the terminal's last lines, or `nil` if no input box is on
+    screen or the adapter has no `read_input`.
+
 ==============================================================================
 10. SENDING TEXT                                                   *duet-send*
 
@@ -679,6 +694,14 @@ terminal. Texts sent after it and still waiting are dropped: pasted after
 it, they would be submitted together with it. duet waits a moment before it
 decides a dialog opened, since the input prompt can leave the screen
 briefly while the agent redraws.
+
+An agent can be slow to take text in, as Claude Code is while it starts.
+When the adapter can read the agent's input box (`read_input` in
+|duet-agents-adapter|; Claude Code's can), duet presses <Enter> only once
+the paste shows in the box, and starts the next send only once the box has
+changed after <Enter>, so texts sent back to back run as separate messages
+instead of merging into one. If the box doesn't change within a couple of
+seconds, duet goes on anyway.
 
 If the agent is not running, duet starts it and shows its terminal without
 moving the cursor. A first start in a new folder may ask you something

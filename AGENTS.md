@@ -106,6 +106,7 @@ These are the main interfaces. Change them only deliberately, and update #1 and 
 ---@field capabilities { mcp: boolean, plan_hook: boolean, system_prompt: boolean }
 ---@field launch fun(self, spec: duet.LaunchSpec): duet.LaunchPlan   -- pure: argv, env, files to write
 ---@field is_ready? fun(self, lines: string[]): boolean
+---@field read_input? fun(self, lines: string[]): string|nil  -- input box as shown; send waits for it to change
 ---@field format_ref? fun(self, path: string, range?: integer[]): string  -- e.g. "@path (lines 10-20)"
 ---@field health? fun(self)                                            -- extra vim.health reports
 

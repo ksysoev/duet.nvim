@@ -40,6 +40,7 @@ local M = {}
 ---@field capabilities duet.Capabilities
 ---@field launch fun(self: duet.Agent, spec: duet.LaunchSpec): duet.LaunchPlan pure: no I/O
 ---@field is_ready? fun(self: duet.Agent, lines: string[]): boolean the TUI accepts input
+---@field read_input? fun(self: duet.Agent, lines: string[]): string|nil the input box as shown, nil if none
 ---@field format_ref? fun(self: duet.Agent, path: string, range?: integer[]): string file reference
 ---@field health? fun(self: duet.Agent) extra :checkhealth reports (vim.health.*)
 
@@ -76,6 +77,7 @@ function M.register(adapter)
   vim.validate("adapter.capabilities", adapter.capabilities, "table")
   vim.validate("adapter.launch", adapter.launch, "function")
   vim.validate("adapter.is_ready", adapter.is_ready, "function", true)
+  vim.validate("adapter.read_input", adapter.read_input, "function", true)
   vim.validate("adapter.format_ref", adapter.format_ref, "function", true)
   vim.validate("adapter.health", adapter.health, "function", true)
   if adapter.name == "" then

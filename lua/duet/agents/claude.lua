@@ -249,20 +249,48 @@ local function last_marker(lines)
   return 1
 end
 
----Whether the TUI shows its input prompt: a prompt line (see is_prompt) right below a
+---The first line of the live input box: a prompt line (see is_prompt) right below a
 ---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
 ---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
 ---screen counts: an older frame left in the scrollback above a dialog doesn't. The
----slash-command menu's `❯` doesn't count (see last_marker).
+---slash-command menu's `❯` doesn't count (see last_marker). nil if there is none.
+---@param lines string[]
+---@return integer|nil
+local function live_prompt(lines)
+  for i = math.max(2, last_marker(lines)), #lines do
+    if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
+      return i
+    end
+  end
+  return nil
+end
+
+---Whether the TUI shows its input prompt, not a dialog (see live_prompt).
 ---@param lines string[] terminal buffer lines
 ---@return boolean
 function M:is_ready(lines)
-  for i = math.max(2, last_marker(lines)), #lines do
-    if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
-      return true
-    end
+  return live_prompt(lines) ~= nil
+end
+
+---The input box's lines as shown, from its prompt line to the line above its closing rule
+---(or the last line, if the box is cut off), with trailing spaces removed: the typed text,
+---a placeholder such as `❯ Try "…"`, or a summary such as `[Pasted text #1 +20 lines]`.
+---nil if no input box is on screen (see live_prompt).
+---@param lines string[] terminal buffer lines
+---@return string|nil
+function M:read_input(lines)
+  local first = live_prompt(lines)
+  if not first then
+    return nil
   end
-  return false
+  local rows = {}
+  for i = first, #lines do
+    if i > first and is_rule(lines[i]) then
+      break
+    end
+    rows[#rows + 1] = (lines[i]:gsub("%s+$", ""))
+  end
+  return table.concat(rows, "\n")
 end
 
 ---Report the CLI version. Runs the whole `cmd` (so wrappers such as `npx …` or
