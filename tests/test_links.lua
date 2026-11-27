@@ -597,6 +597,93 @@ T["terminal"]["a split for the file keeps the terminal's size"] = function()
   eq(child.lua_get("vim.api.nvim_win_get_width(0) >= 20"), true)
 end
 
+---Show a new scratch buffer like a start screen or sidebar draws (`buftype=nofile`) with
+---`filetype` in the current window, or in a new split with `split`. Returns the window.
+---@param filetype string
+---@param split? string e.g. "topleft vertical 30 new"
+---@return integer
+local function screen(filetype, split)
+  return child.lua_get(
+    [[(function(filetype, split)
+      if split then vim.cmd(split) end
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_win_set_buf(0, buf)
+      vim.bo[buf].filetype = filetype
+      return vim.api.nvim_get_current_win()
+    end)(...)]],
+    { filetype, split }
+  )
+end
+
+---Open the link on the terminal's `a.lua:1` line from the terminal, with `prev` as the
+---previous window when given.
+---@param prev? integer
+local function follow_from(prev)
+  if prev then
+    child.lua("vim.api.nvim_set_current_win(...)", { prev })
+  end
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(rel(child.lua_get("where().name")), "a.lua")
+end
+
+T["terminal"]["a start screen is replaced"] = MiniTest.new_set({
+  parametrize = { { "snacks_dashboard" }, { "alpha" }, { "dashboard" }, { "ministarter" }, { "startify" } },
+})
+
+T["terminal"]["a start screen is replaced"]["with filetype %s"] = function(filetype)
+  local dashboard = screen(filetype)
+  agent("printf 'a.lua:1\\n'")
+  follow_from()
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), dashboard)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("s:is_visible()"), true)
+  eq(child.lua_get("_G.notes"), {})
+end
+
+T["terminal"]["a sidebar is not replaced"] = function()
+  local sidebar = screen("neo-tree")
+  child.lua("vim.wo.winfixwidth = true")
+  agent("printf 'a.lua:1\\n'")
+  follow_from()
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { sidebar }), true)
+  eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].filetype", { sidebar }), "neo-tree")
+end
+
+T["terminal"]["a start screen is not replaced"] = MiniTest.new_set({
+  parametrize = { { "modified" }, { "winfixbuf" }, { "replace_filetypes = {}" } },
+})
+
+T["terminal"]["a start screen is not replaced"]["when %s"] = function(kind)
+  local dashboard = screen("snacks_dashboard")
+  if kind == "modified" then
+    -- Neovim never counts a `nofile` buffer as modified: an `acwrite` one can be.
+    child.lua("vim.bo.buftype = 'acwrite'; vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'changed' })")
+    eq(child.lua_get("vim.bo.modified"), true)
+  elseif kind == "winfixbuf" then
+    child.lua("vim.wo.winfixbuf = true")
+  end
+  agent("printf 'a.lua:1\\n'", kind == "replace_filetypes = {}" and { links = { replace_filetypes = {} } } or {})
+  follow_from()
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].filetype", { dashboard }), "snacks_dashboard")
+end
+
+T["terminal"]["the previous start screen window is preferred, then the widest"] = function()
+  local wide = screen("alpha")
+  local narrow = screen("alpha", "topleft vertical 20 new")
+  local sidebar = screen("neo-tree", "topleft vertical 15 new")
+  agent("printf 'a.lua:1\\n'")
+  follow_from(narrow)
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), narrow)
+  -- The dashboard is gone from `narrow`; show one there again and come from the sidebar.
+  screen("alpha")
+  follow_from(sidebar)
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), wide)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 4)
+end
+
 T["terminal"]["]l and [l move between links that resolve"] = function()
   agent("printf 'a.lua:1 nope.lua:2 b.lua:3\\nthen c.lua:4\\n'")
   local row = child.lua_get("cursor_on('a.lua')")

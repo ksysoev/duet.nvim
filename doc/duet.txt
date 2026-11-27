@@ -238,6 +238,13 @@ links ~
         With `highlight`, how often, at most, the links are underlined
         again while output changes or the window scrolls, in milliseconds.
         They are also underlined once it stops.
+                                         *duet-config-links-replace_filetypes*
+    replace_filetypes ~
+        `string[]` (default: `{ "snacks_dashboard", "alpha", "dashboard",`
+        `"ministarter", "startify" }`)
+        Filetypes of start screens that a file link opens in place of, when
+        no window shows a file, instead of opening a split. See
+        |duet-links|. An empty list turns this off.
 
                                                            *duet-config-watch*
 watch ~
@@ -799,11 +806,16 @@ explorer plugin).
 
 Where the file opens: in the previous window if it shows a file, else in the
 first window in the tab that does. A floating terminal is hidden first, so
-the file isn't behind it. With no such window, a split opens on the other
-side of the terminal. The cursor goes to
-the line (and column), the view is centered, and the line or range flashes
-with |hl-DuetLinkFlash|. The jump is added to the |jumplist|, so CTRL-O goes
-back.
+the file isn't behind it. With no such window, the file replaces a start
+screen, as |:edit| would: a window whose filetype is in
+|duet-config-links-replace_filetypes| (the snacks, alpha, dashboard-nvim,
+mini.starter and startify dashboards by default), unless the buffer is
+modified, the window is floating or sets 'winfixbuf'. The previous window
+is preferred, then the widest. Sidebars such as file explorers have other
+filetypes and are never used. With no such window either, a split opens on
+the other side of the terminal. The cursor goes to the line (and column),
+the view is centered, and the line or range flashes with |hl-DuetLinkFlash|.
+The jump is added to the |jumplist|, so CTRL-O goes back.
 
 OSC 8 hyperlinks ~
 Programs can print a link whose target differs from its text, as OSC 8

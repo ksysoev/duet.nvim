@@ -743,8 +743,51 @@ local SPLIT_FROM = { right = "leftabove vnew", left = "rightbelow vnew", bottom 
 ---@field buf? integer the empty buffer the split opened with; a failed `:edit` may
 ---have named it
 
----The window to open a file in: a code window in the tab, else a new split. A floating
----duet terminal in front is hidden first, so the file is not opened under it.
+---Whether a file may be opened in `win` in place of what it shows: a start screen (a
+---filetype in `links.replace_filetypes`) that is not modified, in a window that is not
+---floating, not a duet terminal and does not fix its buffer.
+---@param win integer
+---@param filetypes string[]
+---@return boolean
+local function is_replaceable(win, filetypes)
+  if win == 0 or not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  return vim.api.nvim_win_get_config(win).relative == ""
+    and vim.b[buf].duet_session == nil
+    and not vim.wo[win].winfixbuf
+    and not vim.bo[buf].modified
+    and vim.tbl_contains(filetypes, vim.bo[buf].filetype)
+end
+
+---A start screen window in the tab to open a file in: the previous window when it is
+---one, else the widest. See is_replaceable().
+---@return integer|nil win
+local function replaceable_window()
+  local filetypes = require("duet.config").get().links.replace_filetypes
+  if #filetypes == 0 then
+    return nil
+  end
+  local prev = vim.fn.win_getid(vim.fn.winnr("#"))
+  if is_replaceable(prev, filetypes) then
+    return prev
+  end
+  local best, best_width
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if is_replaceable(win, filetypes) then
+      local width = vim.api.nvim_win_get_width(win)
+      if not best or width > best_width then
+        best, best_width = win, width
+      end
+    end
+  end
+  return best
+end
+
+---The window to open a file in: a code window in the tab, else a start screen window,
+---else a new split. A floating duet terminal in front is hidden first, so the file is
+---not opened under it.
 ---@return integer|nil win
 ---@return duet.links.Undo undo
 ---@return string|nil err the floating terminal could not be hidden
@@ -767,6 +810,10 @@ local function target_window()
   local win, found = util.code_window()
   if found then
     return win, undo
+  end
+  local start_screen = replaceable_window()
+  if start_screen then
+    return start_screen, undo
   end
   vim.cmd(SPLIT_FROM[vim.w[cur].duet_layout] or "leftabove vnew")
   undo.created = vim.api.nvim_get_current_win()
