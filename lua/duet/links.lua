@@ -987,19 +987,54 @@ function M.follow(opts)
   end
 end
 
+-- Whether click() kept the last press for itself, leaving the focus in the terminal: its
+-- drag and release are then kept too (see click_rest()).
+local swallowing = false
+
+---The drag and release keys that go with a press `lhs`, such as `<C-LeftDrag>` and
+---`<C-LeftRelease>` for `<C-LeftMouse>`. Nil for a key that is not a mouse button press.
+---@param lhs string
+---@return { drag: string, release: string }|nil
+function M.click_keys(lhs)
+  local mods, button = vim.fn.keytrans(vim.keycode(lhs)):match("^<(.-)(%u%l+)Mouse>$")
+  if not mods then
+    return nil
+  end
+  mods = mods:gsub("%d%-", "") -- a double-click's drag and release have no count
+  return {
+    drag = ("<%s%sDrag>"):format(mods, button),
+    release = ("<%s%sRelease>"):format(mods, button),
+  }
+end
+
+---The drag or release of a click (mapped next to the `"open_link_mouse"` key): kept when
+---click() kept the press, so the agent gets no release without its press and a drag
+---does not leave Terminal mode; else passed on.
+---@param key string the drag or release key
+---@param release boolean whether it is the release, which ends the click
+function M.click_rest(key, release)
+  if swallowing then
+    swallowing = not release
+    return
+  end
+  vim.api.nvim_feedkeys(vim.keycode(key), "ni", false)
+end
+
 ---Open the link under the mouse (the `"open_link_mouse"` key action, mapped to a click
 ---in Terminal and Normal mode). A click on a duet terminal's text that is not a link does
----nothing. A click anywhere else, such as another window or a status line, does what
----`lhs` does without the mapping.
+---nothing. A click anywhere else, such as another window or a status line, gets Neovim's
+---built-in action for `lhs`.
 ---@param lhs string the key the action is mapped to, e.g. `"<C-LeftMouse>"`
 function M.click(lhs)
   local link, win = M.at_mouse()
+  swallowing = false
   if not win then
     -- Ahead of the release or drag that may already be waiting.
     vim.api.nvim_feedkeys(vim.keycode(lhs), "ni", false)
     return
   end
   if not link then
+    swallowing = true
     return
   end
   local from, terminal_mode = vim.api.nvim_get_current_win(), vim.api.nvim_get_mode().mode == "t"
@@ -1015,6 +1050,7 @@ function M.click(lhs)
     if terminal_mode and vim.bo.buftype == "terminal" then
       vim.cmd.startinsert()
     end
+    swallowing = vim.b.duet_session ~= nil
     require("duet.util").notify(err or "links: nothing to open", vim.log.levels.WARN)
   end
 end
@@ -1161,6 +1197,13 @@ function M.health()
   end
   table.sort(keys)
   local names = table.concat(keys, ", ")
+  for _, lhs in ipairs(keys) do
+    if not M.click_keys(lhs) then
+      vim.health.warn(("%s opens the link under the mouse but is not a mouse click"):format(lhs), {
+        "Bind `open_link_mouse` to a mouse key such as `<C-LeftMouse>`: in Terminal mode this key no longer reaches the agent",
+      })
+    end
+  end
   local mouse = vim.o.mouse
   if not mouse:find("[an]") then
     vim.health.warn(

@@ -376,7 +376,8 @@ Run `:checkhealth duet` to check:
 - that `git` is on your PATH (needed for reviews),
 - your configuration (invalid values and unknown options),
 - the location of the log file,
-- that 'mouse' lets the terminal get clicks when a key opens links with one
+- that 'mouse' lets the terminal get clicks when a key opens links with one,
+  and that such a key is a mouse click
   (|duet-links-mouse|),
 - for the default agent and every agent under |duet-config-agents|: that
   its command can be found (on your PATH, or at the path you set) and
@@ -834,8 +835,11 @@ CTRL-click (`<C-LeftMouse>`) on a link in the agent's terminal opens it, as
 mode, and when the agent uses the mouse itself: duet gets the CTRL-click
 before the agent does, and a plain click still goes to the agent. A
 CTRL-click on text in the terminal that is not a link, or names a file that
-does not exist, does nothing. Anywhere else, such as another window or a
-status line, it does what it does without duet. Only a click in a window
+does not exist, does nothing: duet also maps the drag and release of the
+click (`<C-LeftDrag>`, `<C-LeftRelease>`) and keeps them, unless you map
+them in |duet-config-terminal-keys|. Anywhere else, such as another window
+or a status line, the click gets Neovim's built-in action, not a mapping of
+your own for the same key. Only a click in a window
 showing the agent's terminal while that terminal is the current buffer is
 seen: from another window, it is Neovim's own CTRL-click.
 

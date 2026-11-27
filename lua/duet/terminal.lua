@@ -916,7 +916,7 @@ end
 
 -- Key actions on links (see duet.links), with their descriptions and modes (default:
 -- Normal mode).
----@type table<string, { desc: string, fn: fun(lhs: string), modes?: string[] }>
+---@type table<string, { desc: string, fn: fun(lhs: string), modes?: string[], click?: boolean }>
 local LINK_ACTIONS = {
   open_link = {
     desc = "duet: open the file link under the cursor",
@@ -932,6 +932,7 @@ local LINK_ACTIONS = {
     -- A Terminal-mode mapping gets the click before the agent, even one that tracks the
     -- mouse, so links open without leaving Terminal mode first.
     modes = { "t", "n" },
+    click = true,
     fn = function(lhs)
       require("duet.links").click(lhs)
     end,
@@ -950,6 +951,32 @@ local LINK_ACTIONS = {
   },
 }
 
+---Map the drag and release of a click bound to `"open_link_mouse"`, unless `terminal.keys`
+---maps them itself: a click on text that is not a link is kept whole (see
+---duet.links.click_rest()).
+---@param self duet.Session
+---@param lhs string the click
+---@param modes string[]
+local function map_click_rest(self, lhs, modes)
+  local links = require("duet.links")
+  local keys = links.click_keys(lhs)
+  if not keys then
+    return
+  end
+  local taken = {}
+  for other in pairs(config().keys) do
+    taken[vim.keycode(other)] = true
+  end
+  for _, key in ipairs({ keys.drag, keys.release }) do
+    if not taken[vim.keycode(key)] then
+      local ends = key == keys.release
+      vim.keymap.set(modes, key, function()
+        require("duet.links").click_rest(key, ends)
+      end, { buffer = self.buf, desc = "duet: the rest of a click on a file link" })
+    end
+  end
+end
+
 ---@param self duet.Session
 local function set_keymaps(self)
   for lhs, action in pairs(config().keys) do
@@ -964,6 +991,9 @@ local function set_keymaps(self)
       vim.keymap.set(spec.modes or "n", lhs, function()
         spec.fn(lhs)
       end, { buffer = self.buf, desc = spec.desc })
+      if spec.click then
+        map_click_rest(self, lhs, spec.modes)
+      end
     end
   end
 end

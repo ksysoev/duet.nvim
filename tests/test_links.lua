@@ -305,6 +305,27 @@ end
 
 -- resolve() ----------------------------------------------------------------------
 
+T["click_keys()"] = MiniTest.new_set({
+  parametrize = {
+    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>" } },
+    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>" } },
+    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>" } },
+    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>" } },
+    { "<2-C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>" } },
+    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>" } },
+    { "gf", nil },
+    { "<C-LeftRelease>", nil },
+  },
+})
+
+T["click_keys()"]["for %s"] = function(lhs, want)
+  -- Compared as keys: `<M-C-LeftDrag>` is `<C-M-LeftDrag>`.
+  local function codes(keys)
+    return keys and vim.tbl_map(vim.keycode, keys)
+  end
+  eq(codes(require("duet.links").click_keys(lhs)), codes(want))
+end
+
 T["resolve()"] = MiniTest.new_set()
 
 local function repo()
@@ -1000,7 +1021,8 @@ local TRACK = "printf '\\033[?1000h\\033[?1006h'; "
 ---@param needle string
 ---@param key? string default "<C-LeftMouse>"
 ---@param offset? integer cells after the start of `needle`
-local function click(needle, key, offset)
+---@param rest? string keys sent after the press at the same place, e.g. "<C-LeftDrag>"
+local function click(needle, key, offset, rest)
   local pos = child.lua_get(
     [[(function(needle, offset)
       local row
@@ -1017,7 +1039,10 @@ local function click(needle, key, offset)
     end)(...)]],
     { needle, offset or 0 }
   )
-  child.api.nvim_input(("%s<%d,%d>"):format(key or "<C-LeftMouse>", pos[2], pos[1]))
+  local keys = vim.iter({ key or "<C-LeftMouse>", rest and vim.split(rest, " ") or nil }):flatten():totable()
+  for _, k in ipairs(keys) do
+    child.api.nvim_input(("%s<%d,%d>"):format(k, pos[2], pos[1]))
+  end
   -- Time for a click that should do nothing to do something; others are waited for.
   vim.uv.sleep(50)
 end
@@ -1092,13 +1117,20 @@ T["mouse"]["Ctrl+click does nothing where there is no link"]["on %s"] = function
   agent(TRACK .. ("printf '%s\\n'"):format(text))
   terminal_mode()
   local win = child.lua_get("vim.api.nvim_get_current_win()")
-  click(text, nil, text == "past the end" and #text + 5 or 2)
+  click(text, nil, text == "past the end" and #text + 5 or 2, "<C-LeftDrag> <C-LeftRelease>")
   eq(child.lua_get("vim.api.nvim_get_current_win()"), win)
   eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
   eq(child.lua_get("_G.notes"), {})
   eq(child.lua_get("vim.v.errmsg"), "")
   eq(reports(), {})
+end
+
+T["mouse"]["a Ctrl+drag on text without a link keeps Terminal mode"] = function()
+  agent("printf 'nothing here\\n'")
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftDrag> <C-LeftRelease>")
+  eq(child.lua_get("{ vim.api.nvim_get_mode().mode, where().terminal }"), { "t", true })
 end
 
 T["mouse"]["Ctrl+click follows an OSC 8 hyperlink"] = function()

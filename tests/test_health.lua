@@ -75,6 +75,11 @@ T["reports opening links with a click"]["with %s"] = function(_, mouse, opts, ex
   eq(has(report, "WARNING 'mouse'"), not mouse:find("[an]") and opts == "{}")
 end
 
+T["warns about a key that opens links but is not a click"] = function()
+  child.lua("require('duet').setup({ terminal = { keys = { gf = 'open_link_mouse' } } })")
+  eq(has(checkhealth(), "WARNING gf opens the link under the mouse but is not a mouse click"), true)
+end
+
 T["a failing check does not hide the others"] = function()
   child.lua([[
     local health = require("duet.health")
