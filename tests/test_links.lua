@@ -1096,8 +1096,9 @@ local TRACK = "printf '\\033[?1000h\\033[?1006h'; "
 ---@param offset? integer cells after the start of `needle`
 ---@param rest? string keys sent after the press at the same place, e.g. "<C-LeftDrag>"
 local function click(needle, key, offset, rest)
-  local pos = child.lua_get(
-    [[(function(needle, offset)
+  -- Where `needle` is on the screen, as {row, col} for nvim_input() (0-based). Taken
+  -- again for each probe: a float laid out again after it opened has moved.
+  child.lua([[_G.locate = function(needle, offset)
       local row
       wait(function()
         row = vim.iter(ipairs(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false))):find(function(_, line)
@@ -1109,9 +1110,8 @@ local function click(needle, key, offset, rest)
       local col = vim.api.nvim_buf_get_lines(s.buf, row - 1, row, false)[1]:find(needle, 1, true)
       local pos = vim.fn.screenpos(s:window(), row, col)
       return { pos.row - 1, pos.col - 1 + offset }
-    end)(...)]],
-    { needle, offset or 0 }
-  )
+    end]])
+  local pos
   -- A click lands in a window only once the screen shows it: until then it goes to the
   -- window below (a new floating terminal), which a slow runner can be clicking. Probe
   -- with a button no test uses until a probe lands in the terminal's window.
@@ -1123,6 +1123,7 @@ local function click(needle, key, offset, rest)
   ]])
   local landed = false
   for _ = 1, 100 do
+    pos = child.lua_get("_G.locate(...)", { needle, offset or 0 })
     child.api.nvim_input(("<X1Mouse><%d,%d>"):format(pos[2], pos[1]))
     if child.lua_get("wait(function() return _G.probed ~= nil end, 100) and _G.probed == s:window()") then
       landed = true
@@ -1131,6 +1132,21 @@ local function click(needle, key, offset, rest)
     child.lua("_G.probed = nil; vim.wait(20)")
   end
   child.lua("vim.keymap.del({ 't', 'n' }, '<X1Mouse>', { buffer = s.buf })")
+  if not landed then
+    -- What the probes saw, for a runner where they never land.
+    landed = child.lua_get(
+      [[vim.inspect({
+        pos = ...,
+        win = s:window(),
+        config = s:window() and vim.api.nvim_win_get_config(s:window()),
+        mode = vim.api.nvim_get_mode().mode,
+        mouse = vim.o.mouse,
+        wins = vim.api.nvim_tabpage_list_wins(0),
+        probed = _G.probed,
+      })]],
+      { pos }
+    )
+  end
   eq({ needle, landed }, { needle, true })
   local keys = vim.iter({ key or "<C-LeftMouse>", rest and vim.split(rest, " ") or nil }):flatten():totable()
   for _, k in ipairs(keys) do
