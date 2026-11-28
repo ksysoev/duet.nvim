@@ -887,10 +887,11 @@ Neovim counts clicks at the same place whatever the modifiers: a CTRL-click
 right after a plain click there (within 'mousetime'), such as one that
 focused the terminal, is `<2-C-LeftMouse>`. duet maps the double, triple and
 quadruple clicks of the key too, so that CTRL-click opens the link as well.
-Name one in |duet-config-terminal-keys| to map it yourself, or `false` to let
-it reach the agent. A double or triple CTRL-click on the terminal's text acts
-once: duet keeps its next presses with their drags and releases, so they
-don't reach the agent.
+As for the key itself, your global mapping of them runs only off the
+terminal's text. Name one in |duet-config-terminal-keys| to map it yourself,
+or `false` to leave it unmapped. A double or triple CTRL-click on the
+terminal's text acts once: duet keeps its next presses with their drags and
+releases, mapped or not, so they don't reach the agent.
 
 Anywhere else, such as another window or a status line, the click does what
 it does without duet: your own global mapping of the key (for example

@@ -316,6 +316,8 @@ T["click_keys()"] = MiniTest.new_set({
     { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle", count = "" } },
     { "gf", nil },
     { "<C-LeftRelease>", nil },
+    -- Two keys, the last a press.
+    { "<Space><LeftMouse>", nil },
   },
 })
 
@@ -343,6 +345,7 @@ T["counted_clicks()"] = MiniTest.new_set({
     { "<2-C-LeftMouse>", {} },
     { "<C-LeftRelease>", {} },
     { "gf", {} },
+    { "<Space><LeftMouse>", {} },
   },
 })
 

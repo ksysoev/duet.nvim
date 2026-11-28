@@ -1047,7 +1047,8 @@ end
 ---@return { drag: string, release: string, button: string, count: string }|nil
 function M.click_keys(lhs)
   local mods, button = vim.fn.keytrans(vim.keycode(lhs)):match("^<(.-)(%u%l+)Mouse>$")
-  if not mods then
+  -- One key: `<Space><LeftMouse>` is two.
+  if not mods or mods:find("[<>]") then
     return nil
   end
   return {
@@ -1130,7 +1131,7 @@ local function mouse_key(key)
   local name = vim.fn.keytrans(key)
   for _, kind in ipairs({ "Mouse", "Drag", "Release" }) do
     local mods, button = name:match("^<(.-)(%u%l+)" .. kind .. ">$")
-    if mods then
+    if mods and not mods:find("[<>]") then
       return {
         mods = (mods:gsub("%d%-", "")),
         button = button,
@@ -1151,8 +1152,8 @@ local multiclick_ns = vim.api.nvim_create_namespace("duet.links.multiclick")
 ---@field at integer when that press came (|vim.uv.hrtime()|)
 ---@field pos table where the first press was (|getmousepos()|)
 ---@field in_press boolean between a press it keeps and that press's release
----@field taken boolean a mapping took its last press; unless that is click() (see
----take_multiclick()), the next key ends it
+---@field taken? string the press (raw key) a mapping took last; unless that mapping is
+---click() for it (see take_multiclick()), the next key ends the click
 
 ---@type duet.links.Multiclick|nil
 local multi
@@ -1167,7 +1168,7 @@ end
 ---@param m duet.links.Multiclick
 ---@param press { count: integer }
 local function keep_press(m, press)
-  m.in_press, m.taken, m.last, m.at = true, false, press.count, vim.uv.hrtime()
+  m.in_press, m.taken, m.last, m.at = true, nil, press.count, vim.uv.hrtime()
 end
 
 ---Whether press `k` goes on from the last one of click `m`: Neovim counts up to 4, then
@@ -1206,7 +1207,6 @@ local function keep_multiclick(lhs)
     at = vim.uv.hrtime(),
     pos = vim.fn.getmousepos(),
     in_press = false,
-    taken = false,
   }
   vim.on_key(function(key, typed)
     if typed == "" or not multi then
@@ -1232,7 +1232,7 @@ local function keep_multiclick(lhs)
         keep_press(multi, k)
         return ""
       end
-      multi.taken = true -- a mapping takes it, and runs next
+      multi.taken = typed -- a mapping takes it, and runs next
       return nil
     end
     end_multiclick() -- another key, such as a new click
@@ -1247,7 +1247,7 @@ end
 ---@return boolean
 local function take_multiclick(lhs)
   local k = mouse_key(vim.keycode(lhs))
-  if not (multi and multi.taken and k) then
+  if not (multi and k and multi.taken == vim.keycode(lhs)) then
     return false
   end
   keep_press(multi, k)
