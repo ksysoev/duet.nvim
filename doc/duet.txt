@@ -707,8 +707,9 @@ it, without moving the cursor.
 
 Claude Code marks a dialog's selected choice with `❯` at the start of a row.
 A custom `statusLine` may hold a `❯` after other text (`~/dev ❯ main`), but
-one that starts with `❯` looks like a dialog's choice, so the agent never
-seems ready and every send times out.
+one that starts with `❯`, or with a vertical bar and then `❯` (`│ ❯ main`),
+looks like a dialog's choice, so the agent never seems ready and every send
+times out.
 
 If a dialog opens after the paste but before <Enter>, the text is left in
 the agent's input without being submitted, and duet tells you and shows the
