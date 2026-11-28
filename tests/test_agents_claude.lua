@@ -646,6 +646,21 @@ local ready_cases = {
     lines = { RULE, "❯\194\160first", "  │ ❯ 1. Yes   │", "  │   2. No    │" },
     ready = false,
   },
+  {
+    name = "a bordered choice without a number below a box cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  │ ❯ Yes, allow │", "  │   No         │" },
+    ready = false,
+  },
+  {
+    name = "a choice in a heavy border, a no-break space after its ❯, below a cut-off box",
+    lines = { RULE, "❯\194\160first", "  ┃ ❯\194\160 1. Yes ┃", "  ┃   2. No   ┃" },
+    ready = false,
+  },
+  {
+    name = "a box with a ❯ before a number on a later line, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  took ❯ 2.5 seconds" },
+    ready = true,
+  },
   -- An old input box whose closing rule has newer content below it, with no `❯` after it.
   {
     name = "an old input box above a dialog without a choice marker",

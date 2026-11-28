@@ -186,6 +186,18 @@ local function is_footer_row(line)
   return line:match("^  ") ~= nil and not line:match("^%s*⎿")
 end
 
+---Whether `line` starts with a `❯`, after any spaces and a dialog's vertical borders
+---(`  ❯ 1. Yes`, `  │ ❯ Yes │`): where a dialog marks its selected choice.
+---@param line string
+---@return boolean
+local function starts_with_marker(line)
+  local rest = vim.trim(line)
+  while vim.startswith(rest, "│") or vim.startswith(rest, "┃") do
+    rest = vim.trim(rest:sub(#"│" + 1))
+  end
+  return vim.startswith(rest, "❯")
+end
+
 ---Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude
 ---Code puts a no-break space after the `❯` of the live input box (a plain space in the
 ---transcript and the menu).
@@ -227,9 +239,9 @@ end
 ---
 ---A box cut off at the bottom has no closing rule: its prompt line sits right below the
 ---last rule, and closing is nil. It counts only if its later lines are footer rows (the
----rest of a multi-line input is indented by two spaces) that don't start with a `❯` or hold
----one before a number (`│ ❯ 1. Yes`), as such a row can't be told from a dialog's choice.
----Any other `❯` in a row (`  a ❯ b`) is the user's input. nil if there is no live box.
+---rest of a multi-line input is indented by two spaces) that don't start with a `❯` (see
+---starts_with_marker), as such a row can't be told from a dialog's choice. A `❯` after
+---other text (`  a ❯ b`) is the user's input. nil if there is no live box.
 ---@param lines string[]
 ---@return integer|nil prompt
 ---@return integer|nil closing
@@ -246,8 +258,7 @@ local function live_box(lines)
   end
   if lines[close + 1] and is_prompt(lines[close + 1]) then
     for k = close + 2, #lines do
-      local line = lines[k]
-      if not is_footer_row(line) or line:match("^%s*❯") or line:match("❯%s*%d+%.") then
+      if not is_footer_row(lines[k]) or starts_with_marker(lines[k]) then
         return nil
       end
     end
