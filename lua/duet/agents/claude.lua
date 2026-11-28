@@ -140,13 +140,21 @@ function M:format_ref(path, range)
   return ("%s (lines %d-%d)"):format(ref, range[1], range[2])
 end
 
----Whether `line` is a horizontal rule: only "─" characters, then optional spaces.
----(A Lua pattern can't repeat "─" because it is several bytes long.)
+---The width of a horizontal rule: the number of "─" characters in a line made only of
+---them (then optional spaces), or 0 if `line` is not a rule. (A Lua pattern can't repeat
+---"─" because it is several bytes long.)
+---@param line string
+---@return integer
+local function rule_width(line)
+  local body = line:gsub("%s+$", "")
+  local rest, width = body:gsub("─", "")
+  return rest == "" and width or 0
+end
+
 ---@param line string
 ---@return boolean
 local function is_rule(line)
-  local body = line:gsub("%s+$", "")
-  return body ~= "" and body:gsub("─", "") == ""
+  return rule_width(line) > 0
 end
 
 -- A no-break space (U+00A0): Claude Code puts one after the shell-mode `!`.
@@ -163,83 +171,11 @@ local function is_prompt(line)
   return line == "!" or line:match("^!%s") ~= nil or vim.startswith(line, "!" .. NBSP)
 end
 
----Whether `line` is the selected entry of the slash-command menu: `❯` indented by two
----spaces before a command name, e.g. `  ❯ /clear   Start a new session…`. (Dialogs
----indent their choice by one space.)
----@param line string
----@return boolean
-local function is_menu_choice(line)
-  return line:match("^  ❯ /%S") ~= nil
-end
-
----The prompt line of the input box that the rule at `close` closes: the nearest prompt
----line above it that sits right below a rule, with no rule in between (the lines between
----are the rest of a multi-line input). nil if the rule doesn't close an input box.
----@param lines string[]
----@param close integer
----@return integer|nil
-local function box_prompt(lines, close)
-  for i = close - 1, 2, -1 do
-    if is_rule(lines[i]) then
-      return nil
-    elseif is_prompt(lines[i]) and is_rule(lines[i - 1]) then
-      return i
-    end
-  end
-  return nil
-end
-
----Whether `line` can be a row of the slash-command menu below its selected entry: another
----entry (indented by four spaces), a wrapped description (indented further), or a blank
----line. Claude Code's other output is indented less: `  ⎿ …` results, the `  ⏵⏵ …`
----footer, dialog text.
----@param line string
----@return boolean
-local function is_menu_row(line)
-  return line:match("^%s*$") ~= nil or line:match("^    ") ~= nil
-end
-
----Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude
----Code puts a no-break space after the `❯` of the live input box (a plain space in the
----transcript and the menu).
----@param line string
----@return boolean
-local function holds_command(line)
-  return vim.startswith(line, "❯ /") or vim.startswith(line, "❯" .. NBSP .. "/")
-end
-
----If line `i` is the selected entry of the slash-command menu, the prompt line of the
----input box the menu belongs to. The entry must hang below the box's closing rule (other
----entries or a notice may come between), the box must hold a slash command, and only
----menu rows may follow the entry, so a menu left above newer output doesn't count.
----@param lines string[]
----@param i integer
----@return integer|nil
-local function menu_prompt(lines, i)
-  if not is_menu_choice(lines[i]) then
-    return nil
-  end
-  for j = i + 1, #lines do
-    if not is_menu_row(lines[j]) then
-      return nil
-    end
-  end
-  for j = i - 1, 2, -1 do
-    if lines[j]:find("❯", 1, true) then
-      return nil
-    elseif is_rule(lines[j]) then
-      local prompt = box_prompt(lines, j)
-      return prompt and holds_command(lines[prompt]) and prompt or nil
-    end
-  end
-  return nil
-end
-
 ---Whether `line` can be a row below the live input box: a blank line, or a row indented
 ---by two spaces or more (the footer such as `  ⏵⏵ auto mode on`, notices, a status line,
 ---the slash-command menu, right-aligned hints). Newer content starts further left: output
----(`⏺ …`) and spinners in the first column, dialog text after one space, rules. A tool
----result (`  ⎿ …`) is indented like the footer but only comes below newer output.
+---(`⏺ …`) and spinners in the first column, dialog text and choices after one space, rules.
+---A tool result (`  ⎿ …`) is indented like the footer but only comes below newer output.
 ---@param line string
 ---@return boolean
 local function is_footer_row(line)
@@ -262,92 +198,77 @@ local function only_footer_below(lines, j)
   return true
 end
 
----If line `i` is part of the input box at the bottom of the screen (its prompt line or a
----later line of a multi-line input, above the box's closing rule, with only footer rows
----below that rule), the box's prompt line. The text in that box is the user's, so a `❯`
----there, such as a pasted shell prompt, marks no choice. An older box left above a dialog
----or newer output doesn't count, nor does a box cut off at the bottom: it has no closing
----rule, and its lines can't be told from a dialog's.
+---The live input box at the bottom of the screen: the index of its prompt line (see
+---is_prompt) and of its closing rule. The box is found from the bottom: its closing rule
+---is the last rule on screen, with only footer rows below it (see is_footer_row), and its
+---top rule is the nearest rule above with the same width, with the prompt line right
+---below it. The lines between are the user's input, so a `❯` there (a pasted shell
+---prompt) or a narrower rule (pasted box-drawing text or Claude Code output) is just text.
+---An older box left above a dialog or newer output doesn't count: the dialog's rule or the
+---output comes below its closing rule. Dialogs (folder trust, permission prompts) replace
+---the input box, so a rule closing a dialog has no prompt line below its top rule.
+---
+---A box cut off at the bottom has no closing rule: its prompt line sits right below the
+---last rule, and closing is nil. It counts only if its later lines are footer rows (the
+---rest of a multi-line input is indented by two spaces) without a `❯`, as those can't be
+---told from a dialog's lines. nil if there is no live box.
 ---@param lines string[]
----@param i integer
----@return integer|nil
-local function enclosing_prompt(lines, i)
-  for j = i + 1, #lines do
-    if is_rule(lines[j]) then
-      return only_footer_below(lines, j) and box_prompt(lines, j) or nil
-    end
-  end
-  return nil
-end
-
----The index of the last line that marks a choice with `❯`, or 1 if none does. A `❯` in
----an input box marks nothing: the box's prompt counts instead (see enclosing_prompt).
----Typing `/` opens the slash-command menu below the input box, and its selected entry is
----marked like a dialog's choice: the box's prompt counts instead (see menu_prompt).
----@param lines string[]
----@return integer
-local function last_marker(lines)
+---@return integer|nil prompt
+---@return integer|nil closing
+local function live_box(lines)
+  local close
   for i = #lines, 1, -1 do
-    if lines[i]:find("❯", 1, true) then
-      return enclosing_prompt(lines, i) or menu_prompt(lines, i) or i
+    if is_rule(lines[i]) then
+      close = i
+      break
     end
   end
-  return 1
-end
-
----The first line of the live input box: a prompt line (see is_prompt) right below a
----horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
----mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
----screen counts: an older frame left in the scrollback above a dialog doesn't. A `❯` in
----the input box's text and the slash-command menu's `❯` don't count (see last_marker).
----The last such prompt line counts: in shell mode the live box starts with `!`, so an
----older box can sit between the last `❯` and it. It counts only if just footer rows follow
----the box's closing rule (see is_footer_row): a dialog that marks no choice with `❯`, such
----as `Press Enter to continue`, or newer output can sit below an older box. A box cut off
----at the bottom, with no closing rule, counts only if its later lines pass the same check
----(see is_footer_row: the rest of a multi-line input is indented by two spaces). nil if
----there is none.
----@param lines string[]
----@return integer|nil
-local function live_prompt(lines)
-  for i = #lines, math.max(2, last_marker(lines)), -1 do
-    if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
-      local close = i
-      for j = i + 1, #lines do
-        if is_rule(lines[j]) then
-          close = j
-          break
-        end
+  if not close then
+    return nil
+  end
+  if lines[close + 1] and is_prompt(lines[close + 1]) then
+    for k = close + 2, #lines do
+      if not is_footer_row(lines[k]) or lines[k]:find("❯", 1, true) then
+        return nil
       end
-      return only_footer_below(lines, close) and i or nil
+    end
+    return close + 1, nil
+  end
+  if not only_footer_below(lines, close) then
+    return nil
+  end
+  local width = rule_width(lines[close])
+  for i = close - 1, 1, -1 do
+    if rule_width(lines[i]) == width then
+      if i + 1 < close and is_prompt(lines[i + 1]) then
+        return i + 1, close
+      end
+      return nil
     end
   end
   return nil
 end
 
----Whether the TUI shows its input prompt, not a dialog (see live_prompt).
+---Whether the TUI shows its input prompt, not a dialog (see live_box).
 ---@param lines string[] terminal buffer lines
 ---@return boolean
 function M:is_ready(lines)
-  return live_prompt(lines) ~= nil
+  return live_box(lines) ~= nil
 end
 
 ---The input box's lines as shown, from its prompt line to the line above its closing rule
 ---(or the last line, if the box is cut off), with trailing spaces removed: the typed text,
 ---a placeholder such as `❯ Try "…"`, or a summary such as `[Pasted text #1 +20 lines]`.
----nil if no input box is on screen (see live_prompt).
+---nil if no input box is on screen (see live_box).
 ---@param lines string[] terminal buffer lines
 ---@return string|nil
 function M:read_input(lines)
-  local first = live_prompt(lines)
+  local first, close = live_box(lines)
   if not first then
     return nil
   end
   local rows = {}
-  for i = first, #lines do
-    if i > first and is_rule(lines[i]) then
-      break
-    end
+  for i = first, (close or #lines + 1) - 1 do
     rows[#rows + 1] = (lines[i]:gsub("%s+$", ""))
   end
   return table.concat(rows, "\n")
