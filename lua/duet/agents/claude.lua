@@ -227,8 +227,9 @@ end
 ---
 ---A box cut off at the bottom has no closing rule: its prompt line sits right below the
 ---last rule, and closing is nil. It counts only if its later lines are footer rows (the
----rest of a multi-line input is indented by two spaces) without a `❯`, as those can't be
----told from a dialog's lines. nil if there is no live box.
+---rest of a multi-line input is indented by two spaces) that don't start with a `❯`, as
+---such a row can't be told from a dialog's choice. A `❯` further into a row (`  a ❯ b`) is
+---the user's input. nil if there is no live box.
 ---@param lines string[]
 ---@return integer|nil prompt
 ---@return integer|nil closing
@@ -245,7 +246,7 @@ local function live_box(lines)
   end
   if lines[close + 1] and is_prompt(lines[close + 1]) then
     for k = close + 2, #lines do
-      if not is_footer_row(lines[k]) or lines[k]:find("❯", 1, true) then
+      if not is_footer_row(lines[k]) or lines[k]:match("^%s*❯") then
         return nil
       end
     end
