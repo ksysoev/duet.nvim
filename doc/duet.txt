@@ -643,10 +643,12 @@ require("duet.terminal").ensure([{agent}] [, {opts}]) *duet.terminal.ensure()*
     Return the running session for the current project, starting the agent
     if there is none and restarting it if it has exited, or `nil` and an
     error message. The cursor does not move. With `{ show = true }`, a
-    session this call starts is shown. As with |:Duet-open|, an agent that
-    exited while you were not looking is not restarted: its terminal is
-    shown, so you can read its output, and an error is returned; the next
-    call restarts it.
+    session this call starts is shown. A session started hidden gets a
+    terminal the size of the window |duet-config-terminal-layout| opens, so
+    the agent draws its whole screen before you see it. As with
+    |:Duet-open|, an agent that exited while you were not looking is not
+    restarted: its terminal is shown, so you can read its output, and an
+    error is returned; the next call restarts it.
 
                                                      *duet-session-when_ready*
 session:when_ready({timeout_ms}, {cb})

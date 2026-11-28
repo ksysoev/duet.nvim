@@ -19,7 +19,7 @@ local M = {}
 ---@field stopping boolean the job is being stopped by duet, so its exit is expected
 ---@field stopped boolean duet stopped the agent while it ran (stop, restart, wiping the buffer)
 ---@field seen_ready boolean the agent's TUI has been ready for input at least once
----@field rows integer|nil height of the tallest window last seen showing the terminal
+---@field rows integer|nil height of the tallest window last seen showing it, or of its hidden start float
 local Session = {}
 Session.__index = Session
 M.Session = Session
@@ -38,9 +38,9 @@ local FILETYPE = "duet_terminal"
 -- Readiness polling (Session:when_ready): how often, and how many lines the adapter's
 -- is_ready and read_input see at least. They see the terminal's screen down to its last
 -- non-blank row, or the last READY_LINES lines ending there if those reach higher (also for a
--- terminal no window has shown yet). The live input box is on the screen, however tall typed
--- input makes it; reading no higher keeps old boxes in the scrollback, which could pass for
--- ready while a dialog is open, out of view.
+-- terminal started hidden where no float could be opened, see call_hidden()). The live input
+-- box is on the screen, however tall typed input makes it; reading no higher keeps old boxes
+-- in the scrollback, which could pass for ready while a dialog is open, out of view.
 local READY_POLL_MS = 50
 local READY_LINES = 50
 
@@ -220,6 +220,7 @@ end
 ---@field columns integer editor width
 ---@field lines integer rows available for windows
 ---@field top? integer rows taken above them (the tabline)
+---@field winbar? boolean a new split has a winbar (it copies the current window's 'winbar')
 
 ---Window config for a layout. Pure: depends only on its arguments.
 ---@param layout "float"|"right"|"left"|"bottom"
@@ -255,6 +256,26 @@ function M.win_config(layout, opts, editor, title)
   return { split = layout, win = -1, width = M.split_target(opts.split.width, columns, opts.split.min_code_width) }
 end
 
+---Size of the window a layout opens, for a terminal started without one: the float's size,
+---a side split's width by the rows windows have, or a bottom split's height by the editor's
+---width. A split's height leaves out its winbar. Pure.
+---@param layout "float"|"right"|"left"|"bottom"
+---@param opts table the `terminal` config
+---@param editor duet.EditorSize
+---@return integer width
+---@return integer height
+function M.layout_size(layout, opts, editor)
+  local cfg = M.win_config(layout, opts, editor)
+  if layout == "float" then
+    return cfg.width, cfg.height
+  end
+  local bar = editor.winbar and 1 or 0
+  if layout == "bottom" then
+    return editor.columns, math.max(1, cfg.height - bar)
+  end
+  return cfg.width, math.max(1, editor.lines - bar)
+end
+
 ---The editor area windows can use: the tabline, the command line and a status line are
 ---left out.
 ---@return duet.EditorSize
@@ -262,7 +283,12 @@ local function editor_size()
   local tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
   local top = tabline and 1 or 0
   local status = vim.o.laststatus == 0 and 0 or 1
-  return { columns = vim.o.columns, lines = math.max(1, vim.o.lines - vim.o.cmdheight - status - top), top = top }
+  return {
+    columns = vim.o.columns,
+    lines = math.max(1, vim.o.lines - vim.o.cmdheight - status - top),
+    top = top,
+    winbar = vim.o.winbar ~= "",
+  }
 end
 
 ---The room windows have, as a string to compare: it changes with the editor size, the
@@ -1002,10 +1028,11 @@ end
 
 ---The terminal's screen height: Neovim sizes a terminal to the tallest window showing it, in
 ---any tab, and keeps that size while no window shows it, so the height last seen stands in
----(also recorded when the terminal leaves a window). The height leaves out a window's winbar,
----and Neovim's autocmd window (`nvim_buf_call` on a hidden buffer) doesn't count, as in Neovim.
+---(also recorded when the terminal leaves a window), or the hidden float's for a terminal started
+---hidden (see call_hidden()). The height leaves out a window's winbar, and Neovim's autocmd
+---window (`nvim_buf_call` on a hidden buffer) doesn't count, as in Neovim.
 ---@param self duet.Session
----@return integer rows 0 if no window has shown the terminal
+---@return integer rows 0 if no window has shown the terminal and it started in the autocmd window
 local function screen_rows(self)
   local rows = 0
   for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
@@ -1067,7 +1094,42 @@ local function setup_buffer(self)
   })
 end
 
----Start the job in `win`, or in the hidden buffer if `win` is nil.
+---Run `fn` in a hidden float that shows the session's buffer, sized like the window the
+---layout opens, so a job started there gets that screen size: Neovim's autocmd window
+---(`nvim_buf_call()`) is only 5 rows tall. The float is opened and closed without autocmds,
+---and the size is remembered as the terminal's height (see screen_rows()). Without a float,
+---e.g. when the editor can't open one, `fn` runs in the autocmd window.
+---@param self duet.Session
+---@param fn fun(): any
+---@return boolean ok
+---@return any result `fn`'s result, or its error
+local function call_hidden(self, fn)
+  local width, height = M.layout_size(config().layout, config(), editor_size())
+  local opened, win = pcall(vim.api.nvim_open_win, self.buf, false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = width,
+    height = height,
+    hide = true,
+    focusable = false,
+    style = "minimal",
+    noautocmd = true,
+  })
+  if not opened then
+    return pcall(vim.api.nvim_buf_call, self.buf, fn)
+  end
+  -- Closing the buffer's only window would unload it, ending the job, with 'nohidden'.
+  vim.bo[self.buf].bufhidden = "hide"
+  local ok, result = pcall(vim.api.nvim_win_call, win, fn)
+  pcall(vim.cmd, ("noautocmd call nvim_win_close(%d, v:true)"):format(win))
+  if ok then
+    self.rows = height
+  end
+  return ok, result
+end
+
+---Start the job in `win`, or hidden if `win` is nil (see call_hidden()).
 ---@param self duet.Session
 ---@param plan duet.LaunchPlan
 ---@param win integer|nil
@@ -1090,7 +1152,7 @@ local function spawn(self, plan, win)
   if win then
     ok, job = pcall(vim.api.nvim_win_call, win, run)
   else
-    ok, job = pcall(vim.api.nvim_buf_call, self.buf, run)
+    ok, job = call_hidden(self, run)
   end
   if not ok then
     return nil, ("terminal: cannot start %s: %s"):format(self.agent.name, (tostring(job):gsub("^Vim:", "")))
@@ -1203,7 +1265,7 @@ function Session.new(agent, opts)
   if not started then
     if opened then
       pcall(vim.api.nvim_win_close, win, true)
-    elseif vim.api.nvim_win_is_valid(win) then
+    elseif win and vim.api.nvim_win_is_valid(win) then
       -- Put the previous buffer back, or an empty one if it is gone, so deleting ours
       -- below does not close a window we were lent.
       local keep = prev_buf and vim.api.nvim_buf_is_valid(prev_buf) and prev_buf or vim.api.nvim_create_buf(true, false)
