@@ -1047,7 +1047,10 @@ local function open_in_window(abs, jump, exclude)
         pcall(vim.cmd, "noautocmd balt " .. vim.fn.fnameescape(alt_name))
       end
     end)
-    vim.bo[alt].buflisted = listed
+    if not listed then
+      -- With no BufDelete either.
+      vim.cmd(("noautocmd call setbufvar(%d, '&buflisted', 0)"):format(alt))
+    end
   end
   return nil, edit_err, win
 end
@@ -1078,13 +1081,14 @@ function M.open(link, opts)
     end
   end
   ensure_highlights()
+  local insert = vim.api.nvim_get_mode().mode:sub(1, 1) == "i"
   local win, open_err, left_out = open_in_window(abs, link.line ~= nil)
   if not win and left_out then
     -- Once, in the next window that would do: the error is this attempt's.
     win, open_err = open_in_window(abs, link.line ~= nil, left_out)
-    if win then
+    if win and not insert then
       -- The layout put back in between went through the terminal, where `auto_insert`
-      -- started Insert mode: the file opens in Normal mode, as after one attempt.
+      -- started Insert mode: the file opens in the mode open() was called in.
       vim.cmd.stopinsert()
     end
   end

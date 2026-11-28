@@ -944,6 +944,17 @@ T["terminal"]["a code window where :edit fails"]["is left in Normal mode with au
   eq(child.api.nvim_get_mode().mode, "n")
 end
 
+T["terminal"]["a code window where :edit fails"]["is left in Insert mode when open() is called in it"] = function()
+  agent("true")
+  child.cmd("wincmd p")
+  local code = show_modified("b.lua", FAILING_WRITE)
+  child.type_keys("i", "<Cmd>lua require('duet.links').open({ path = 'a.lua' })<CR>")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { code }), true)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(0)")), "a.lua")
+  eq(child.api.nvim_get_mode().mode, "i")
+end
+
 T["terminal"]["a code window where :edit fails"]["keeps a buffer an autocmd made while it failed"] = function()
   show_modified(
     "b.lua",
