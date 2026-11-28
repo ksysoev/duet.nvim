@@ -197,6 +197,71 @@ local PASTED = {
   "  ⏵⏵ auto mode on (shift+tab to cycle)",
 }
 
+-- A rule with a scroll label, as Claude Code draws it when the input has more lines than
+-- the box shows: `─── ↑ 38 more ───…`, `width` characters long in all.
+local function scroll_rule(arrow, n, width)
+  local head = ("─── %s %d more "):format(arrow, n)
+  return head .. string.rep("─", width - vim.fn.strchars(head))
+end
+
+-- The rows `  line <from> x ❯ y` to `  line <to> x ❯ y`, as typed in the E2E captures.
+local function typed_rows(from, to)
+  local rows = {}
+  for i = from, to do
+    rows[#rows + 1] = ("  line %d x ❯ y"):format(i)
+  end
+  return rows
+end
+
+local W80 = string.rep("─", 80)
+local UP80 = scroll_rule("↑", 38, 80)
+local DOWN80 = scroll_rule("↓", 38, 80)
+local FOOTER = "  ⏵⏵ auto mode on (shift+tab to cycle)"
+
+-- An input of about 50 lines, scrolled to its end: the prompt line is hidden above.
+local SCROLLED = {
+  "⏺ an earlier answer",
+  UP80,
+  "  line 39",
+  "  line 40",
+  "  line 41",
+  W80,
+  FOOTER,
+}
+
+-- Captured from Claude Code 2.1.332 in an 80x48 Neovim terminal, with 45 typed lines
+-- (the first `❯` + no-break space, the rest indented), cut to the box and the line above.
+local EFFORT = string.rep(" ", 60) .. "◐ medium · /effort"
+-- The cursor on the last line: the top rule is labelled.
+local CAPTURED_BOTTOM = vim
+  .iter({
+    { EFFORT, scroll_rule("↑", 27, 80) },
+    typed_rows(28, 45),
+    { "", string.rep("─", 80), FOOTER },
+  })
+  :flatten()
+  :totable()
+-- The cursor on the first line: the closing rule is labelled.
+local CAPTURED_TOP = vim
+  .iter({
+    { "", string.rep("─", 80), "❯\194\160line 1 x ❯ y" },
+    typed_rows(2, 19),
+    { scroll_rule("↓", 27, 80), FOOTER },
+  })
+  :flatten()
+  :totable()
+-- The cursor in the middle: both rules are labelled.
+local CAPTURED_MIDDLE = vim
+  .iter({
+    { "", scroll_rule("↑", 13, 80) },
+    typed_rows(14, 32),
+    { scroll_rule("↓", 14, 80), FOOTER },
+  })
+  :flatten()
+  :totable()
+-- In an 8-line terminal: the box is cut off below its top rule.
+local CAPTURED_CUT = { "", "", scroll_rule("↑", 43, 80), "  line 44 x ❯ y", "  line 45 x ❯ y" }
+
 local ready_cases = {
   { name = "input prompt", lines = READY, ready = true },
   {
@@ -866,6 +931,98 @@ local ready_cases = {
   -- Captured from Claude Code 2.1.330 in an 80-column Neovim terminal: a paste of rules
   -- and a `❯` line, expanded. Later lines are indented by two spaces and wrapped.
   { name = "pasted rules and a ❯, as Claude Code shows them", lines = PASTED, ready = true },
+  { name = "a scrolled input: the top rule is labelled ↑ N more", lines = SCROLLED, ready = true },
+  { name = "a scrolled input, captured: the top rule labelled", lines = CAPTURED_BOTTOM, ready = true },
+  { name = "a scrolled input, captured: the closing rule labelled", lines = CAPTURED_TOP, ready = true },
+  { name = "a scrolled input, captured: both rules labelled", lines = CAPTURED_MIDDLE, ready = true },
+  { name = "a scrolled input, captured: cut off at the bottom", lines = CAPTURED_CUT, ready = true },
+  {
+    name = "a scrolled input: the closing rule is labelled ↓ N more",
+    lines = { W80, "❯\194\160line 1", "  line 2", "  line 3", DOWN80, FOOTER },
+    ready = true,
+  },
+  {
+    name = "a scrolled input: both rules labelled",
+    lines = { scroll_rule("↑", 12, 80), "  line 13", "  line 14", scroll_rule("↓", 25, 80), FOOTER },
+    ready = true,
+  },
+  {
+    name = "a scrolled input with a blank row and a ❯ in it",
+    lines = { UP80, "", "  line 37 x ❯ y", "  line 38", W80, FOOTER },
+    ready = true,
+  },
+  {
+    name = "a scrolled input cut off at the bottom",
+    lines = { "⏺ an earlier answer", UP80, "  line 39", "  line 40" },
+    ready = true,
+  },
+  {
+    name = "a scrolled input whose ↑ rule is wider than the closing rule",
+    lines = { scroll_rule("↑", 38, 100), "  line 39", W80, FOOTER },
+    ready = false,
+  },
+  {
+    -- With a footer row below, this would read as a scrolled box cut off at the bottom.
+    name = "a ↑ label on the closing rule",
+    lines = { W80, "❯\194\160line 1", "  line 2", UP80 },
+    ready = false,
+  },
+  {
+    name = "a ↓ label on the top rule",
+    lines = { DOWN80, "❯\194\160line 1", "  line 2", W80, FOOTER },
+    ready = false,
+  },
+  {
+    name = "a ↑ rule over a row in the first column",
+    lines = { UP80, "line 39", W80, FOOTER },
+    ready = false,
+  },
+  {
+    name = "a ↑ rule over a dialog choice",
+    lines = { UP80, " ❯ 1. Yes", "   2. No", W80 },
+    ready = false,
+  },
+  {
+    name = "a ↑ rule over a choice indented by two spaces",
+    lines = { UP80, "  ❯ 1. Yes", "    2. No", W80 },
+    ready = false,
+  },
+  {
+    name = "a ↑ rule over a dialog choice, cut off at the bottom",
+    lines = { UP80, " ❯ 1. Yes", "   2. No" },
+    ready = false,
+  },
+  {
+    name = "a ↑ rule over a choice indented by two spaces, cut off at the bottom",
+    lines = { UP80, "  ❯ 1. Yes", "    2. No" },
+    ready = false,
+  },
+  { name = "a ↑ rule with nothing below it", lines = { "⏺ an answer", UP80 }, ready = false },
+  {
+    name = "a scrolled input with a dialog choice below it",
+    lines = { UP80, "  line 39", W80, " ❯ 1. Yes", "   2. No" },
+    ready = false,
+  },
+  {
+    name = "a scrolled input with newer output below it",
+    lines = { UP80, "  line 39", W80, "⏺ an answer" },
+    ready = false,
+  },
+  {
+    name = "a malformed label with no count",
+    lines = { "─── ↑ more " .. string.rep("─", 69), "  line 39", W80 },
+    ready = false,
+  },
+  {
+    name = "a malformed label with another word",
+    lines = { "─── ↑ 3 lines " .. string.rep("─", 66), "  line 39", W80 },
+    ready = false,
+  },
+  {
+    name = "a malformed label with another arrow",
+    lines = { "─── x 3 more " .. string.rep("─", 67), "  line 39", W80 },
+    ready = false,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({
@@ -888,6 +1045,17 @@ for _, case in ipairs(ready_cases) do
   T["is_ready()"][case.name] = function()
     eq(claude():is_ready(case.lines), case.ready)
   end
+end
+
+-- With 'ambiwidth' "double", "─" and "↑" take two columns each: rules are compared by
+-- their length in characters, not their display width.
+T["is_ready()"]["a scrolled input with 'ambiwidth' double"] = function()
+  local saved = vim.o.ambiwidth
+  vim.o.ambiwidth = "double"
+  local ok, ready = pcall(claude().is_ready, claude(), CAPTURED_BOTTOM)
+  vim.o.ambiwidth = saved
+  eq(ok, true)
+  eq(ready, true)
 end
 
 T["read_input()"] = MiniTest.new_set()
@@ -984,6 +1152,41 @@ local input_cases = {
     name = "pasted rules and a ❯, as Claude Code shows them",
     lines = PASTED,
     input = table.concat(vim.list_slice(PASTED, 3, 10), "\n"),
+  },
+  {
+    name = "a scrolled input: the rows shown",
+    lines = { UP80, "  line 39   ", "", "  line 41", R80, "  ⏵⏵ auto mode on" },
+    input = "  line 39\n\n  line 41",
+  },
+  {
+    name = "a scrolled input with a labelled closing rule",
+    lines = { R80, "❯" .. NBSP .. "line 1", "  line 2", DOWN80, "  ⏵⏵ auto mode on" },
+    input = "❯" .. NBSP .. "line 1\n  line 2",
+  },
+  {
+    name = "a scrolled input cut off at the bottom",
+    lines = { UP80, "  line 39", "  line 40" },
+    input = "  line 39\n  line 40",
+  },
+  {
+    name = "a scrolled input, captured: the top rule labelled",
+    lines = CAPTURED_BOTTOM,
+    input = table.concat(vim.list_extend(typed_rows(28, 45), { "" }), "\n"),
+  },
+  {
+    name = "a scrolled input, captured: the closing rule labelled",
+    lines = CAPTURED_TOP,
+    input = "❯\194\160line 1 x ❯ y\n" .. table.concat(typed_rows(2, 19), "\n"),
+  },
+  {
+    name = "a scrolled input, captured: both rules labelled",
+    lines = CAPTURED_MIDDLE,
+    input = table.concat(typed_rows(14, 32), "\n"),
+  },
+  {
+    name = "a scrolled input, captured: cut off at the bottom",
+    lines = CAPTURED_CUT,
+    input = "  line 44 x ❯ y\n  line 45 x ❯ y",
   },
 }
 
