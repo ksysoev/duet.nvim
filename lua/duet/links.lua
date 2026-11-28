@@ -1058,6 +1058,22 @@ function M.click_keys(lhs)
   }
 end
 
+---The double, triple and quadruple clicks of a mouse button press `lhs` without a count:
+---`<2-C-LeftMouse>`, `<3-C-LeftMouse>` and `<4-C-LeftMouse>` for `<C-LeftMouse>`.
+---Neovim counts clicks at the same place whatever the modifiers, so a CTRL-click right
+---after a plain click there is `<2-C-LeftMouse>`; it counts up to 4. Empty for a key
+---that is not a press, or already has a count.
+---@param lhs string
+---@return string[]
+function M.counted_clicks(lhs)
+  local keys = M.click_keys(lhs)
+  if not keys or keys.count ~= "" then
+    return {}
+  end
+  local name = vim.fn.keytrans(vim.keycode(lhs)):sub(2)
+  return { "<2-" .. name, "<3-" .. name, "<4-" .. name }
+end
+
 -- The drag and release keys mapped for the rest of a click that click() kept, by buffer.
 ---@type table<integer, string[]>
 local kept = {}
@@ -1128,53 +1144,114 @@ end
 
 local multiclick_ns = vim.api.nvim_create_namespace("duet.links.multiclick")
 
+---@class duet.links.Multiclick the double or triple click keep_multiclick() keeps
+---@field button string its button, e.g. "Left"
+---@field mods string its modifiers without the count, e.g. "C-"
+---@field last integer the count of its last press
+---@field at integer when that press came (|vim.uv.hrtime()|)
+---@field pos table where the first press was (|getmousepos()|)
+---@field in_press boolean between a press it keeps and that press's release
+---@field taken boolean a mapping took its last press; unless that is click() (see
+---take_multiclick()), the next key ends it
+
+---@type duet.links.Multiclick|nil
+local multi
+
+---Stop keeping a double or triple click.
+local function end_multiclick()
+  multi = nil
+  vim.on_key(nil, multiclick_ns)
+end
+
+---Keep `press`, the next press of click `m`, with its drag and release.
+---@param m duet.links.Multiclick
+---@param press { count: integer }
+local function keep_press(m, press)
+  m.in_press, m.taken, m.last, m.at = true, false, press.count, vim.uv.hrtime()
+end
+
+---Whether press `k` goes on from the last one of click `m`: Neovim counts up to 4, then
+---from 1 again for a press at the same place soon after, as for a new click anywhere.
+---@param m duet.links.Multiclick
+---@param k { count: integer }
+---@return boolean
+local function next_press(m, k)
+  if k.count == m.last + 1 then
+    return true
+  end
+  local now = vim.fn.getmousepos()
+  return m.last == 4
+    and k.count == 1
+    and (vim.uv.hrtime() - m.at) / 1e6 <= vim.o.mousetime
+    and now.screenrow == m.pos.screenrow
+    and now.screencol == m.pos.screencol
+end
+
 ---Keep the rest of a double or triple click whose first press click() handled: drop its
 ---next presses (`<C-2-LeftMouse>`, …) and their drags and releases, with or without the
----modifiers, unless a mapping takes them. Otherwise, where the terminal stays in Terminal
----mode, the agent gets them. Another key typed, such as a new single click, ends it.
+---modifiers. Otherwise, where the terminal stays in Terminal mode, the agent gets them.
+---A press a mapping takes, such as duet's own `<2-C-LeftMouse>`, is not dropped: the
+---mapping runs, and click() keeps it (see take_multiclick()). Another key typed, such as
+---a new single click, ends it.
 ---@param lhs string the press click() handled
 local function keep_multiclick(lhs)
   local first = mouse_key(vim.keycode(lhs))
   if not first or first.kind ~= "Mouse" then
     return
   end
-  local in_press = false -- between a press that was dropped and its release
-  local last, at = first.count, vim.uv.hrtime() -- the count of the last press, and when
-  local pos = vim.fn.getmousepos()
-  ---Whether press `k` goes on from the last one: Neovim counts up to 4, then from 1 again
-  ---for a press at the same place soon after, as for a new click anywhere.
-  local function next_press(k)
-    if k.count == last + 1 then
-      return true
-    end
-    local now = vim.fn.getmousepos()
-    return last == 4
-      and k.count == 1
-      and (vim.uv.hrtime() - at) / 1e6 <= vim.o.mousetime
-      and now.screenrow == pos.screenrow
-      and now.screencol == pos.screencol
-  end
+  multi = {
+    button = first.button,
+    mods = first.mods,
+    last = first.count,
+    at = vim.uv.hrtime(),
+    pos = vim.fn.getmousepos(),
+    in_press = false,
+    taken = false,
+  }
   vim.on_key(function(key, typed)
-    if typed == "" then
+    if typed == "" or not multi then
       return nil -- not typed, e.g. keys a mapping or the code that opened the link fed
+    end
+    if multi.taken then
+      -- Another mapping than duet's click took the last press: that ended the click.
+      end_multiclick()
+      return nil
     end
     -- What was typed tells the click; `key` differs when a mapping took it, such as the
     -- release keep_rest() mapped, and such keys are left alone.
     local k = mouse_key(typed)
-    if k and k.button == first.button and k.kind ~= "Mouse" then
-      if key == typed and in_press and (k.mods == first.mods or k.mods == "") then
-        in_press = k.kind ~= "Release"
+    if k and k.button == multi.button and k.kind ~= "Mouse" then
+      if key == typed and multi.in_press and (k.mods == multi.mods or k.mods == "") then
+        multi.in_press = k.kind ~= "Release"
         return ""
       end
       return nil -- the drag or release of the first press
     end
-    if k and k.button == first.button and k.mods == first.mods and next_press(k) and key == typed then
-      in_press, last, at = true, k.count, vim.uv.hrtime()
-      return ""
+    if k and k.button == multi.button and k.mods == multi.mods and next_press(multi, k) then
+      if key == typed then
+        keep_press(multi, k)
+        return ""
+      end
+      multi.taken = true -- a mapping takes it, and runs next
+      return nil
     end
-    vim.on_key(nil, multiclick_ns) -- another key, such as a new click
+    end_multiclick() -- another key, such as a new click
     return nil
   end, multiclick_ns)
+end
+
+---Whether the press click() runs for, mapped to `lhs`, is the next press of the click
+---keep_multiclick() keeps, which then keeps it: duet maps the double, triple and
+---quadruple clicks of a key too, for a CTRL-click right after a plain click.
+---@param lhs string
+---@return boolean
+local function take_multiclick(lhs)
+  local k = mouse_key(vim.keycode(lhs))
+  if not (multi and multi.taken and k) then
+    return false
+  end
+  keep_press(multi, k)
+  return true
 end
 
 ---The global (not buffer-local) mapping of `lhs` in `mode`, as nvim_get_keymap() has
@@ -1283,8 +1360,16 @@ end
 ---nothing. A click anywhere else, such as another window or a status line, does what it
 ---does without duet: your own global mapping of `lhs`, else Neovim's built-in action. The
 ---rest of a double or triple click on the text is kept, so it does not act there.
+---
+---duet maps the double, triple and quadruple clicks of the key too (`<2-C-LeftMouse>`,
+---…): Neovim counts clicks whatever the modifiers, so a CTRL-click right after a plain
+---click is one. Such a press acts as a single click, unless it is the next press of a
+---click this already handled.
 ---@param lhs string the key the action is mapped to, e.g. `"<C-LeftMouse>"`
 function M.click(lhs)
+  if take_multiclick(lhs) then
+    return
+  end
   local link, win = M.at_mouse()
   if not win then
     replay(lhs)

@@ -333,6 +333,24 @@ T["click_keys()"]["for %s"] = function(lhs, want)
   eq(codes(require("duet.links").click_keys(lhs)), codes(want))
 end
 
+T["counted_clicks()"] = MiniTest.new_set({
+  parametrize = {
+    { "<C-LeftMouse>", { "<2-C-LeftMouse>", "<3-C-LeftMouse>", "<4-C-LeftMouse>" } },
+    { "<c-leftmouse>", { "<2-C-LeftMouse>", "<3-C-LeftMouse>", "<4-C-LeftMouse>" } },
+    { "<C-M-LeftMouse>", { "<2-C-M-LeftMouse>", "<3-C-M-LeftMouse>", "<4-C-M-LeftMouse>" } },
+    { "<RightMouse>", { "<2-RightMouse>", "<3-RightMouse>", "<4-RightMouse>" } },
+    -- A key that has a count already is one of them.
+    { "<2-C-LeftMouse>", {} },
+    { "<C-LeftRelease>", {} },
+    { "gf", {} },
+  },
+})
+
+T["counted_clicks()"]["for %s"] = function(lhs, want)
+  -- Compared as keys: `<2-C-LeftMouse>` is `<C-2-LeftMouse>`.
+  eq(vim.tbl_map(vim.keycode, require("duet.links").counted_clicks(lhs)), vim.tbl_map(vim.keycode, want))
+end
+
 T["resolve()"] = MiniTest.new_set()
 
 local function repo()
@@ -1754,6 +1772,143 @@ T["mouse"]["a Ctrl+click after a double Ctrl+click opens a link again"] = functi
   terminal_mode()
   click("b.lua")
   eq(child.lua_get("wait(function() return vim.api.nvim_buf_get_name(0):find('b.lua', 1, true) ~= nil end)"), true)
+end
+
+---Record the mouse presses typed, as Neovim names them (e.g. `<C-2-LeftMouse>`), in
+---`_G.presses`.
+local function record_presses()
+  child.lua([[_G.presses = {}
+    vim.on_key(function(_, typed)
+      local name = vim.fn.keytrans(typed)
+      if name:find("Mouse>$") and not name:find("X1Mouse", 1, true) then
+        table.insert(_G.presses, name)
+      end
+    end)]])
+end
+
+-- Neovim counts clicks at the same place whatever the modifiers: the issue's
+-- `<LeftMouse> <LeftRelease> <C-LeftMouse> <C-LeftRelease>` is read as
+-- `<LeftMouse> <LeftRelease> <C-2-LeftMouse> <C-2-LeftRelease>`.
+T["mouse"]["a Ctrl+click right after plain clicks opens the link"] = MiniTest.new_set({
+  parametrize = {
+    { "in Terminal mode", "t", 1, "<C-2-LeftMouse>" },
+    { "in Normal mode", "n", 1, "<C-2-LeftMouse>" },
+    { "after two plain clicks", "t", 2, "<C-3-LeftMouse>" },
+    { "after three plain clicks", "t", 3, "<C-4-LeftMouse>" },
+  },
+})
+
+T["mouse"]["a Ctrl+click right after plain clicks opens the link"]["%s"] = function(_, mode, plain, want)
+  agent(TRACK .. "printf 'see a.lua:1 here\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  if mode == "t" then
+    terminal_mode()
+  else
+    child.lua("vim.api.nvim_set_current_win(s:window())")
+  end
+  record_presses()
+  local rest = { "<LeftRelease>" }
+  for _ = 2, plain do
+    vim.list_extend(rest, { "<LeftMouse>", "<LeftRelease>" })
+  end
+  vim.list_extend(rest, { "<C-LeftMouse>", "<C-LeftRelease>" })
+  click("a.lua", "<LeftMouse>", 0, table.concat(rest, " "))
+  opened()
+  eq(child.lua_get("_G.presses[#_G.presses]"), want)
+  eq(child.lua_get("{ vim.api.nvim_get_current_win(), vim.v.errmsg }"), { code, "" })
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("_G.notes"), {})
+  -- The job got the plain clicks only.
+  for _, report in ipairs(reports()) do
+    eq(report:find("[[<16;", 1, true), nil)
+  end
+end
+
+T["mouse"]["a double Ctrl+click after a plain click acts once"] = function()
+  -- The link fails to open, so the terminal stays current and gets the next press too.
+  agent(TRACK .. "printf 'a.lua:1\\n'", { terminal = { layout = "float" } })
+  child.lua("s.hide = function() return nil, 'cannot hide' end")
+  terminal_mode()
+  record_presses()
+  click("a.lua", "<LeftMouse>", 0, "<LeftRelease> <C-LeftMouse> <C-LeftRelease> <C-LeftMouse> <C-LeftRelease>")
+  eq(child.lua_get("wait(function() return #_G.notes > 0 end)"), true)
+  vim.uv.sleep(100)
+  eq(child.lua_get("_G.presses"), { "<LeftMouse>", "<C-2-LeftMouse>", "<C-3-LeftMouse>" })
+  eq(child.lua_get("#_G.notes"), 1)
+  eq(child.lua_get("{ vim.api.nvim_get_mode().mode, vim.v.errmsg }"), { "t", "" })
+  -- The job got the plain click only.
+  eq(#reports(), 1)
+  eq(reports()[1]:find("[[<16;", 1, true), nil)
+end
+
+T["mouse"]["a triple Ctrl+click on text without a link keeps its next presses"] = function()
+  -- The next presses are <C-2-LeftMouse> and <C-3-LeftMouse>, which duet maps: they are
+  -- kept, not looked at as clicks of their own.
+  agent(TRACK .. "printf 'nothing here\\n'")
+  terminal_mode()
+  child.lua([[local at_mouse = L.at_mouse
+    L.at_mouse = function(...)
+      _G.looked = (_G.looked or 0) + 1
+      return at_mouse(...)
+    end]])
+  click("nothing", nil, 2, "<C-LeftRelease> <C-LeftMouse> <C-LeftDrag> <C-LeftRelease> <C-LeftMouse> <LeftRelease>")
+  vim.uv.sleep(100)
+  eq(child.lua_get("_G.looked"), 1)
+  eq(reports(), {})
+  eq(child.lua_get("{ vim.api.nvim_get_mode().mode, vim.v.errmsg }"), { "t", "" })
+  -- A plain click after it goes to the job whole.
+  child.o.mousetime = 1
+  vim.uv.sleep(20)
+  click("here", "<LeftMouse>", 0, "<LeftRelease>")
+  eq(
+    child.lua_get(
+      "wait(function() return vim.fn.join(vim.fn.getbufline(s.buf, 1, '$')):find('[[<0;', 1, true) ~= nil end)"
+    ),
+    true
+  )
+end
+
+---The description of the terminal's own mapping of `key` in `mode`, or nil.
+---@param key string
+---@param mode string
+---@return string|nil
+local function buf_map_desc(key, mode)
+  return child.lua(
+    [[local key, mode = ...
+    return vim.api.nvim_buf_call(s.buf, function() return vim.fn.maparg(key, mode, false, true).desc end)]],
+    { key, mode }
+  )
+end
+
+T["mouse"]["the double clicks of the key are mapped too"] = MiniTest.new_set({
+  parametrize = {
+    { "by default", {}, { "<2-C-LeftMouse>", "<3-C-LeftMouse>", "<4-C-LeftMouse>" }, {} },
+    {
+      "unless terminal.keys names one",
+      { ["<2-C-LeftMouse>"] = false, ["<C-3-LeftMouse>"] = "hide" },
+      { "<4-C-LeftMouse>" },
+      { "<2-C-LeftMouse>" },
+    },
+    {
+      "for a rebound key",
+      { ["<C-LeftMouse>"] = false, ["<M-LeftMouse>"] = "open_link_mouse" },
+      { "<2-M-LeftMouse>", "<3-M-LeftMouse>", "<4-M-LeftMouse>" },
+      { "<2-C-LeftMouse>" },
+    },
+  },
+})
+
+T["mouse"]["the double clicks of the key are mapped too"]["%s"] = function(_, keys, mapped, unmapped)
+  agent("printf 'a.lua:1\\n'", { terminal = { keys = keys } })
+  local desc = "duet: open the file link clicked"
+  for _, mode in ipairs({ "t", "n" }) do
+    for _, key in ipairs(mapped) do
+      eq({ key, mode, buf_map_desc(key, mode) }, { key, mode, desc })
+    end
+    for _, key in ipairs(unmapped) do
+      eq({ key, mode, buf_map_desc(key, mode) }, { key, mode, vim.NIL })
+    end
+  end
 end
 
 T["mouse"]["the click can be rebound"] = function()
