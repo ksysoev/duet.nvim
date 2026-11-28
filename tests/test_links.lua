@@ -2380,6 +2380,27 @@ T["open()"]["opens a directory"] = function()
   eq(child.lua_get("L.open({ path = 'dir' })"), true)
 end
 
+T["open()"]["opens a directory whose buffer a file explorer unloads"] = function()
+  child.fn.mkdir(root .. "/dir")
+  local code = show_code("b.lua")
+  -- As a file explorer may do: show its own buffer in place of the directory's, and
+  -- unload that one.
+  child.lua([[vim.api.nvim_create_autocmd("BufEnter", {
+    callback = function(args)
+      if vim.fn.isdirectory(args.file) == 1 then
+        vim.bo[args.buf].bufhidden = "unload"
+        _G.explorer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_win_set_buf(0, _G.explorer)
+        _G.unloaded = not vim.api.nvim_buf_is_loaded(args.buf)
+      end
+    end,
+  })]])
+  eq(child.lua_get("{ L.open({ path = 'dir' }) }"), { true })
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...) == _G.explorer", { code }), true)
+  eq(child.lua_get("_G.unloaded"), true)
+end
+
 T["open()"]["returns an error for a missing file"] = function()
   eq(child.lua_get("{ L.open({ path = 'nope.lua' }) }"), { vim.NIL, "links: no such file 'nope.lua'" })
 end

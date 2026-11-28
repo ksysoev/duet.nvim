@@ -1023,22 +1023,40 @@ local function open_in_window(abs, jump, exclude)
   vim.cmd("normal! m'")
   -- 'confirm' would ask to save when 'autowriteall' can't write the buffer: without it
   -- `:edit` fails with E37 and another window is tried (see |duet-links|). No OptionSet.
-  local confirm = vim.o.confirm and vim.bo[buf].modified
+  local confirm = vim.o.confirm and vim.o.autowriteall and vim.bo[buf].modified
   if confirm then
     vim.cmd("noautocmd set noconfirm")
   end
+  -- Whether the swap file's ATTENTION prompt came up: only then may the file be left
+  -- unloaded by the user's answer. v:swapchoice is left alone.
+  local swapped = false
+  local group = vim.api.nvim_create_augroup("duet.links.swap", { clear = true })
+  vim.api.nvim_create_autocmd("SwapExists", {
+    group = group,
+    callback = function()
+      swapped = true
+    end,
+  })
   -- `keepalt`: a failed `:edit` leaves the alternate file as it was.
   local ok, edit_err = pcall(vim.cmd.edit, { args = { vim.fn.fnameescape(abs) }, mods = { keepalt = true } })
-  if confirm then
+  vim.api.nvim_del_augroup_by_id(group)
+  -- Unless an autocommand set it meanwhile.
+  if confirm and not vim.o.confirm then
     vim.cmd("noautocmd set confirm")
   end
   local shown = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) or nil
   local kept = shown == buf and vim.api.nvim_buf_get_name(buf) == name
   -- Whether the file is not shown in the window: it kept its buffer, or Quit or Abort at
   -- the swap file's ATTENTION prompt left the file's buffer unloaded, and the window a new
-  -- empty one when `:edit` had reused its own (an empty one, renamed).
+  -- empty one when `:edit` had reused its own (an empty one, renamed). Not for a
+  -- directory, whose buffer a file explorer may delete.
   local not_shown = kept
-    or (not (shown and vim.api.nvim_buf_is_loaded(shown) and names_file(shown, abs)) and not_loaded(abs))
+    or (
+      swapped
+      and not (shown and vim.api.nvim_buf_is_loaded(shown) and names_file(shown, abs))
+      and vim.fn.isdirectory(abs) == 0
+      and not_loaded(abs)
+    )
   -- When the window did leave its buffer for the file, that one is the alternate file, as
   -- `:edit` sets it (setreg() does not list it).
   if not not_shown and shown ~= buf and vim.api.nvim_buf_is_valid(buf) then
