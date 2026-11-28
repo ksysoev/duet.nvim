@@ -249,6 +249,19 @@ local function is_footer_row(line)
   return line:match("^  ") ~= nil and not line:match("^%s*⎿")
 end
 
+---Whether only footer rows (see is_footer_row) follow line `j`.
+---@param lines string[]
+---@param j integer
+---@return boolean
+local function only_footer_below(lines, j)
+  for k = j + 1, #lines do
+    if not is_footer_row(lines[k]) then
+      return false
+    end
+  end
+  return true
+end
+
 ---If line `i` is part of the input box at the bottom of the screen (its prompt line or a
 ---later line of a multi-line input, above the box's closing rule, with only footer rows
 ---below that rule), the box's prompt line. The text in that box is the user's, so a `❯`
@@ -261,12 +274,7 @@ end
 local function enclosing_prompt(lines, i)
   for j = i + 1, #lines do
     if is_rule(lines[j]) then
-      for k = j + 1, #lines do
-        if not is_footer_row(lines[k]) then
-          return nil
-        end
-      end
-      return box_prompt(lines, j)
+      return only_footer_below(lines, j) and box_prompt(lines, j) or nil
     end
   end
   return nil
@@ -293,13 +301,25 @@ end
 ---screen counts: an older frame left in the scrollback above a dialog doesn't. A `❯` in
 ---the input box's text and the slash-command menu's `❯` don't count (see last_marker).
 ---The last such prompt line counts: in shell mode the live box starts with `!`, so an
----older box can sit between the last `❯` and it. nil if there is none.
+---older box can sit between the last `❯` and it. It counts only if just footer rows follow
+---the box's closing rule (see is_footer_row): a dialog that marks no choice with `❯`, such
+---as `Press Enter to continue`, or newer output can sit below an older box. A box cut off
+---at the bottom, with no closing rule, counts only if its later lines pass the same check
+---(see is_footer_row: the rest of a multi-line input is indented by two spaces). nil if
+---there is none.
 ---@param lines string[]
 ---@return integer|nil
 local function live_prompt(lines)
   for i = #lines, math.max(2, last_marker(lines)), -1 do
     if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
-      return i
+      local close = i
+      for j = i + 1, #lines do
+        if is_rule(lines[j]) then
+          close = j
+          break
+        end
+      end
+      return only_footer_below(lines, close) and i or nil
     end
   end
   return nil

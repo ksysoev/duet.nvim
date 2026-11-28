@@ -606,6 +606,90 @@ local ready_cases = {
     lines = { RULE, "❯\194\160first", "  a ❯ b" },
     ready = false,
   },
+  -- An old input box whose closing rule has newer content below it, with no `❯` after it.
+  {
+    name = "an old input box above a dialog without a choice marker",
+    lines = { RULE, "❯ old", RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old input box above a dialog's text without a rule",
+    lines = { RULE, "❯ old", RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old input box above an indented result",
+    lines = { RULE, "❯ first", RULE, "  ⎿  Interrupted · What should Claude do instead?" },
+    ready = false,
+  },
+  {
+    name = "an old input box above newer output in the first column",
+    lines = { RULE, "❯ first", RULE, "⏺ Done." },
+    ready = false,
+  },
+  {
+    name = "an old input box above a spinner",
+    lines = { RULE, "❯ first", RULE, "", "✻ Thinking…" },
+    ready = false,
+  },
+  {
+    name = "an old shell prompt above a dialog without a choice marker",
+    lines = { RULE, "! ls", RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old input box above newer output and a dialog without a choice marker",
+    lines = { RULE, "❯ old", RULE, "⏺ Bash(x)", RULE, " Do you want to proceed?", " Yes / No" },
+    ready = false,
+  },
+  {
+    name = "an old input box above a dialog without a choice marker, then a blank line",
+    lines = { RULE, "❯ old", RULE, RULE, " Press Enter to continue", "" },
+    ready = false,
+  },
+  {
+    name = "an old box without a closing rule above a dialog's text",
+    lines = { RULE, "❯ old", " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box without a closing rule above newer output",
+    lines = { RULE, "❯ old", "⏺ Done." },
+    ready = false,
+  },
+  {
+    name = "a multi-line input cut off at the bottom",
+    lines = { RULE, "❯\194\160line one", "  line two", "" },
+    ready = true,
+  },
+  -- Footer rows below the live box, as Claude Code 2.1.330 draws them.
+  {
+    name = "the live box with a status line and the mode footer",
+    lines = { RULE, "❯\194\160", RULE, "  [Opus] ~/dev/duet main", "  ⏵⏵ auto mode on (shift+tab to cycle)" },
+    ready = true,
+  },
+  {
+    -- Captured with `"statusLine": { "padding": 0, … }`: Claude Code indents it by two
+    -- spaces even so, and a `⏺` the command prints doesn't reach the first column.
+    name = "the live box with a status line starting with a symbol",
+    lines = { RULE, "❯\194\160", RULE, "  ⏺ [Opus] ~/dev main", "  ⏵⏵ auto mode on (shift+tab to cycle)" },
+    ready = true,
+  },
+  {
+    name = "the live box with the shortcuts hint and a notice",
+    lines = { RULE, "❯\194\160", RULE, "  ? for shortcuts", "  ⚠ Transcript saving is off", "" },
+    ready = true,
+  },
+  {
+    name = "the live box with the file picker open",
+    lines = { RULE, "❯\194\160@a", RULE, "  @ a.lua", "    b/a.txt" },
+    ready = true,
+  },
+  {
+    name = "the live box with a right-aligned hint",
+    lines = { RULE, "❯\194\160", RULE, "  ⏸ manual mode on", string.rep(" ", 70) .. "ctrl+y to paste deleted text" },
+    ready = true,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({
@@ -693,6 +777,11 @@ local input_cases = {
       " ❯ 1. Yes",
       "   2. No",
     },
+    input = vim.NIL,
+  },
+  {
+    name = "an old box above a dialog without a choice marker",
+    lines = { R80, "❯ old", R80, R80, " Press Enter to continue" },
     input = vim.NIL,
   },
 }
