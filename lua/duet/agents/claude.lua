@@ -140,22 +140,46 @@ function M:format_ref(path, range)
   return ("%s (lines %d-%d)"):format(ref, range[1], range[2])
 end
 
----The width of a horizontal rule: the number of "─" characters in a line made only of
----them (then optional spaces), or 0 if `line` is not a rule. (A Lua pattern can't repeat
+---Whether `s` is made only of "─" characters (at least one). (A Lua pattern can't repeat
 ---"─" because it is several bytes long.)
----@param line string
----@return integer
-local function rule_width(line)
-  local body = line:gsub("%s+$", "")
-  local rest, width = body:gsub("─", "")
-  return rest == "" and width or 0
+---@param s string
+---@return boolean
+local function only_dashes(s)
+  local rest, n = s:gsub("─", "")
+  return rest == "" and n > 0
 end
 
----Whether `line` is a horizontal rule (see rule_width).
+---Parse a horizontal rule: a line made only of "─" (then optional spaces), or one with a
+---scroll label in it, `─── ↑ 38 more ───…` or `─── ↓ 38 more ───…`, which Claude Code
+---draws when the input has more lines than its box shows. Returns the rule's display
+---width (the number of "─" for a plain rule) and its label: nil for a plain rule, "up"
+---for `↑` (lines hidden above) or "down" for `↓` (lines hidden below). The width is 0
+---if `line` is not a rule, which includes a malformed label.
+---@param line string
+---@return integer width
+---@return "up"|"down"|nil label
+local function parse_rule(line)
+  local body = line:gsub("%s+$", "")
+  if only_dashes(body) then
+    local _, width = body:gsub("─", "")
+    return width, nil
+  end
+  local left, arrow, right = body:match("^(%S+) (%S+) %d+ more (%S+)$")
+  if not left or not only_dashes(left) or not only_dashes(right) then
+    return 0, nil
+  end
+  local label = ({ ["↑"] = "up", ["↓"] = "down" })[arrow]
+  if not label then
+    return 0, nil
+  end
+  return vim.api.nvim_strwidth(body), label
+end
+
+---Whether `line` is a horizontal rule, plain or labelled (see parse_rule).
 ---@param line string
 ---@return boolean
 local function is_rule(line)
-  return rule_width(line) > 0
+  return (parse_rule(line)) > 0
 end
 
 -- A no-break space (U+00A0): Claude Code puts one after the shell-mode `!`.
@@ -170,6 +194,16 @@ local function is_prompt(line)
     return not line:match("^❯%s*%d+%.")
   end
   return line == "!" or line:match("^!%s") ~= nil or vim.startswith(line, "!" .. NBSP)
+end
+
+---Whether `line` can continue the input inside the box: a blank row, or one indented by two
+---spaces (nothing inside the box but the prompt line reaches the first columns). The
+---first row under a top rule labelled `↑ N more` is one, as the prompt line has scrolled
+---out of the box.
+---@param line string
+---@return boolean
+local function is_continuation(line)
+  return line:match("^%s*$") ~= nil or line:match("^  ") ~= nil
 end
 
 ---Whether `line` can be a row below the live input box: a blank line, or a row indented
@@ -227,8 +261,8 @@ local function only_footer_below(lines, prompt, close)
   return true
 end
 
----The live input box at the bottom of the screen: the index of its prompt line (see
----is_prompt) and of its closing rule. The box is found from the bottom: its closing rule
+---The live input box at the bottom of the screen: the index of its first row (its prompt
+---line, see is_prompt) and of its closing rule. The box is found from the bottom: its closing rule
 ---is the last rule on screen, with only footer rows below it (see only_footer_below), and
 ---its top rule is the nearest rule above with the same width, with the prompt line right
 ---below it. The lines between are the user's input, so a `❯` there (a pasted shell
@@ -241,9 +275,17 @@ end
 ---last rule, and closing is nil. It counts only if its later lines are footer rows (the
 ---rest of a multi-line input is indented by two spaces) that don't start with a `❯` (see
 ---starts_with_marker), as such a row can't be told from a dialog's choice. A `❯` after
----other text (`  a ❯ b`) is the user's input. nil if there is no live box.
+---other text (`  a ❯ b`) is the user's input.
+---
+---An input taller than the box scrolls: the top rule is then labelled `↑ N more` and the
+---box's first row is a continuation row (see is_continuation), not the prompt line, and
+---the closing rule may be labelled `↓ N more` (see parse_rule). A labelled rule's width is
+---its whole display width. An `↑` rule is only ever a top rule and a `↓` rule only a
+---closing rule, so a box with them the other way round is not live. A scrolled box cut off
+---at the bottom follows the rules above, with no row (the first included) starting with a
+---`❯`. nil if there is no live box.
 ---@param lines string[]
----@return integer|nil prompt
+---@return integer|nil first
 ---@return integer|nil closing
 local function live_box(lines)
   local close
@@ -256,7 +298,21 @@ local function live_box(lines)
   if not close then
     return nil
   end
-  if lines[close + 1] and is_prompt(lines[close + 1]) then
+  local width, label = parse_rule(lines[close])
+  local next_row = lines[close + 1]
+  if label == "up" then
+    -- Only a top rule is labelled ↑, so this is a scrolled box cut off at the bottom.
+    if not next_row or not is_continuation(next_row) then
+      return nil
+    end
+    for k = close + 1, #lines do
+      if not is_footer_row(lines[k]) or starts_with_marker(lines[k]) then
+        return nil
+      end
+    end
+    return close + 1, nil
+  end
+  if label == nil and next_row and is_prompt(next_row) then
     for k = close + 2, #lines do
       if not is_footer_row(lines[k]) or starts_with_marker(lines[k]) then
         return nil
@@ -264,12 +320,21 @@ local function live_box(lines)
     end
     return close + 1, nil
   end
-  local width = rule_width(lines[close])
   for i = close - 1, 1, -1 do
-    if rule_width(lines[i]) == width then
-      local prompt = i + 1
-      if prompt < close and is_prompt(lines[prompt]) and only_footer_below(lines, lines[prompt], close) then
-        return prompt, close
+    local top_width, top_label = parse_rule(lines[i])
+    if top_width == width then
+      local first = i + 1
+      if top_label == "down" or first >= close then
+        return nil
+      end
+      local starts
+      if top_label == "up" then
+        starts = is_continuation(lines[first])
+      else
+        starts = is_prompt(lines[first])
+      end
+      if starts and only_footer_below(lines, lines[first], close) then
+        return first, close
       end
       return nil
     end
@@ -284,9 +349,11 @@ function M:is_ready(lines)
   return live_box(lines) ~= nil
 end
 
----The input box's lines as shown, from its prompt line to the line above its closing rule
+---The input box's lines as shown, from its first row to the line above its closing rule
 ---(or the last line, if the box is cut off), with trailing spaces removed: the typed text,
 ---a placeholder such as `❯ Try "…"`, or a summary such as `[Pasted text #1 +20 lines]`.
+---When the input is taller than the box and scrolls (see live_box), these are the rows
+---shown, from the first one under the top rule.
 ---nil if no input box is on screen (see live_box).
 ---@param lines string[] terminal buffer lines
 ---@return string|nil
