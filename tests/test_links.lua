@@ -868,6 +868,110 @@ T["terminal"]["a modified code window that can be left"]["is used with %s"] = fu
   end
 end
 
+-- 'autowriteall' lets the window go, but its write fails: `:edit` then fails with E37 in
+-- it, before it leaves the buffer.
+local FAILING_WRITE = [[
+  vim.o.autowriteall = true
+  vim.api.nvim_create_autocmd("BufWriteCmd", { buffer = 0, callback = function() error("cannot write") end })
+]]
+
+T["terminal"]["a code window where :edit fails"] = MiniTest.new_set()
+
+T["terminal"]["a code window where :edit fails"]["is left for a split"] = MiniTest.new_set({
+  parametrize = { { "a read-only directory" }, { "a failing BufWriteCmd" } },
+})
+
+T["terminal"]["a code window where :edit fails"]["is left for a split"]["with %s"] = function(kind)
+  local file, written
+  if kind == "a read-only directory" then
+    local dir = root .. "/ro"
+    vim.fn.mkdir(dir)
+    file = "ro/new.lua"
+    show_modified(file, "vim.o.autowriteall = true")
+    vim.uv.fs_chmod(dir, tonumber("555", 8))
+    MiniTest.finally(function()
+      vim.uv.fs_chmod(dir, tonumber("755", 8))
+    end)
+    if vim.uv.fs_access(dir, "W") then
+      MiniTest.skip("the directory is still writable (running as root?)")
+    end
+    written = function()
+      return vim.uv.fs_stat(root .. "/" .. file) ~= nil
+    end
+  else
+    file = "b.lua"
+    show_modified(file, FAILING_WRITE)
+    written = function()
+      return not vim.deep_equal(vim.fn.readfile(root .. "/b.lua"), { "b" })
+    end
+  end
+  local code = child.lua_get("vim.api.nvim_get_current_win()")
+  local buf = child.lua_get("vim.api.nvim_get_current_buf()")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { code }), true)
+  -- The change is still there, unsaved, in its window.
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { code }), buf)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(...)", { buf })), file)
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(..., 0, -1, false)", { buf }), { "changed" })
+  eq(child.lua_get("vim.bo[...].modified", { buf }), true)
+  eq(written(), false)
+end
+
+T["terminal"]["a code window where :edit fails"]["is left for another code window"] = function()
+  local free = show_code("c.lua")
+  child.cmd("split")
+  local code = show_modified("b.lua", FAILING_WRITE)
+  agent("printf 'a.lua:1\\n'")
+  -- The failing window is the previous one, and comes first in the tab.
+  follow_from(code)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), free)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].modified", { code }), true)
+end
+
+T["terminal"]["a code window where :edit fails"]["is reported once when the split fails too"] = function()
+  local code = show_modified("b.lua", FAILING_WRITE)
+  local buf = child.lua_get("vim.api.nvim_get_current_buf()")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.lua([[vim.api.nvim_create_autocmd("BufReadCmd", {
+    pattern = "*/a.lua",
+    callback = function() error("cannot read") end,
+  })]])
+  local before = child.lua_get("#vim.api.nvim_tabpage_list_wins(0)")
+  local bufs = child.lua_get("#vim.fn.getbufinfo({ buflisted = 1 })")
+  child.type_keys("gf")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+  eq(child.lua_get("#vim.fn.getbufinfo({ buflisted = 1 })"), bufs)
+  eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { code }), buf)
+  eq(child.lua_get("#_G.notes"), 1)
+  -- The split's error, not the first window's.
+  eq(child.lua_get("_G.notes[1].msg"):find("cannot read", 1, true) ~= nil, true)
+end
+
+T["terminal"]["a code window where :edit fails"]["is not left when the file fails to read"] = function()
+  local code = show_code("b.lua")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.lua([[vim.api.nvim_create_autocmd("BufReadCmd", {
+    pattern = "*/a.lua",
+    callback = function() error("cannot read") end,
+  })]])
+  child.type_keys("gf")
+  -- No split to show the same failure again.
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("#_G.notes"), 1)
+  eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
+  eq(child.lua_get("vim.api.nvim_win_is_valid(...)", { code }), true)
+end
+
 T["terminal"]["a start screen is replaced"] = MiniTest.new_set({
   parametrize = { { "snacks_dashboard" }, { "alpha" }, { "dashboard" }, { "ministarter" }, { "startify" } },
 })
@@ -983,6 +1087,7 @@ T["terminal"]["a file that fails to open in place of a start screen"]["with bufh
   eq(child.lua_get("vim.fn.bufexists(...)", { root .. "/a.lua" }), 0)
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
   eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  eq(child.lua_get("#_G.notes"), 1)
   eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
 end
 
@@ -1193,6 +1298,7 @@ T["terminal"]["a file that fails to open leaves the layout as it was"]["with %s"
   local bufs = child.lua_get("#vim.fn.getbufinfo({ buflisted = 1 })")
   child.type_keys("gf")
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+  eq(child.lua_get("#_G.notes"), 1)
   eq(child.lua_get("#vim.fn.getbufinfo({ buflisted = 1 })"), bufs)
   eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
   eq(child.lua_get("_G.notes[1].msg"):find("cannot open 'a.lua'", 1, true) ~= nil, true)
