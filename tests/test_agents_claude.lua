@@ -669,6 +669,13 @@ local ready_cases = {
     ready = true,
   },
   {
+    -- Captured with `"statusLine": { "padding": 0, … }`: Claude Code indents it by two
+    -- spaces even so, and a `⏺` the command prints doesn't reach the first column.
+    name = "the live box with a status line starting with a symbol",
+    lines = { RULE, "❯\194\160", RULE, "  ⏺ [Opus] ~/dev main", "  ⏵⏵ auto mode on (shift+tab to cycle)" },
+    ready = true,
+  },
+  {
     name = "the live box with the shortcuts hint and a notice",
     lines = { RULE, "❯\194\160", RULE, "  ? for shortcuts", "  ⚠ Transcript saving is off", "" },
     ready = true,
