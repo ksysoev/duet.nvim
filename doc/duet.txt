@@ -538,18 +538,20 @@ Fields:
                   no processes started. `self.cmd`, `self.args` and
                   `self.env` already include the user's overrides.
 - `is_ready`      (optional) `fun(self, lines): boolean`: whether the
-                  agent's terminal (given as its last lines) accepts input:
-                  `false` while the agent starts up or shows a dialog, such
-                  as a permission prompt. Without it, duet sends text as
+                  agent's terminal accepts input, given its last lines
+                  (as many as its screen has rows, at least 50): `false`
+                  while the agent starts up or shows a dialog, such as a
+                  permission prompt. Without it, duet sends text as
                   soon as the agent runs and can't tell when it is asking
                   something, so define it for any agent with a TUI.
 - `read_input`    (optional) `fun(self, lines): string|nil`: the agent's
-                  input box as shown in its terminal (given as its last
-                  lines), or `nil` if no input box is on screen. It can be
-                  the box's raw lines, placeholder included: duet compares
-                  it from one moment to the next, and checks whether it
-                  ends with a one-line text of up to 200 bytes (whitespace
-                  and no-break spaces ignored, so wrapped rows are fine).
+                  input box as shown in its terminal (given the same lines
+                  as `is_ready`), or `nil` if no input box is on screen. It
+                  can be the box's raw lines, placeholder included: duet
+                  compares it from one moment to the next, and checks
+                  whether it ends with a one-line text of up to 200 bytes
+                  (whitespace and no-break spaces ignored, so wrapped rows
+                  are fine).
                   With it, a send presses <Enter> once the paste shows in
                   the box, and the next send waits until <Enter> has been
                   taken in (the box changed and no longer shows the text),

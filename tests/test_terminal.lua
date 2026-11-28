@@ -914,6 +914,86 @@ T["session"]["deleting or unloading the buffer forgets the session quietly"]["%s
   eq(child.lua_get("_G.notes"), {})
 end
 
+T["ready lines"] = MiniTest.new_set()
+
+-- Start an agent that prints "TOP", 80 more lines and "END", with an adapter whose
+-- is_ready and read_input look for "TOP" and record how many lines they got, in _G.got.
+-- `opts` go to Session.new(); with `rows`, the terminal opens in a split that tall.
+local function tall_output(opts, rows)
+  child.lua(
+    [[
+    local opts, rows = ...
+    _G.got = {}
+    local function top(lines)
+      table.insert(_G.got, #lines)
+      return vim.tbl_contains(lines, "TOP") and "TOP" or nil
+    end
+    require("duet.agents").register({
+      name = "tall",
+      cmd = { "sh", "-c", "echo TOP; i=1; while [ $i -le 80 ]; do echo line $i; i=$((i+1)); done; echo END; exec cat" },
+      capabilities = { mcp = false, plan_hook = false, system_prompt = false },
+      launch = function(self)
+        return { argv = vim.deepcopy(self.cmd), env = {}, files = {} }
+      end,
+      is_ready = function(_, lines)
+        return top(lines) ~= nil
+      end,
+      read_input = function(_, lines)
+        return top(lines)
+      end,
+    })
+    require("duet").setup({ agent = "tall" })
+    if rows then
+      vim.cmd(rows .. "split")
+      opts.win = vim.api.nvim_get_current_win()
+    end
+    _G.s = assert(T.Session.new(require("duet.agents").get("tall"), opts))
+    assert(wait(function() return text(s.id):find("END", 1, true) ~= nil end))
+  ]],
+    { opts, rows }
+  )
+end
+
+T["ready lines"]["see the whole screen when it is taller than READY_LINES"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("vim.api.nvim_win_get_height(s:window()) > 82"), true)
+  eq(child.lua_get("{ s:is_ready(), s:input() }"), { true, "TOP" })
+  eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["ready lines"]["are at least READY_LINES on a small screen"] = function()
+  tall_output({}, 20)
+  eq(child.lua_get("vim.api.nvim_win_get_height(s:window())"), 20)
+  eq(child.lua_get("{ s:is_ready(), s:input() == nil }"), { false, true })
+  eq(child.lua_get("_G.got"), { 50, 50 })
+end
+
+T["ready lines"]["follow the tallest window showing the terminal"] = function()
+  child.o.lines = 120
+  tall_output({}, 20)
+  child.lua("vim.cmd('tabnew'); vim.api.nvim_win_set_buf(0, s.buf)")
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 82 })
+end
+
+T["ready lines"]["keep the last screen height while the terminal is hidden"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("s:is_ready()"), true)
+  child.lua("s:hide()")
+  eq(child.lua_get("s:is_visible()"), false)
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["ready lines"]["are READY_LINES for a terminal never shown"] = function()
+  child.o.lines = 120
+  tall_output({ hidden = true })
+  eq(child.lua_get("s:is_ready()"), false)
+  eq(child.lua_get("_G.got"), { 50 })
+end
+
 T["current()"] = MiniTest.new_set()
 
 T["current()"]["follows the project root"] = function()
