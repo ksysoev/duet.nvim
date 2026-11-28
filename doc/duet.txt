@@ -539,12 +539,13 @@ Fields:
                   `self.env` already include the user's overrides.
 - `is_ready`      (optional) `fun(self, lines): boolean`: whether the
                   agent's terminal accepts input, given its screen down to
-                  the last non-blank row (at least the last 50 lines,
-                  ending at the last non-blank row): `false` while the
-                  agent starts up or shows a dialog, such as a permission
-                  prompt. Without it, duet sends text as soon as the agent
-                  runs and can't tell when it is asking something, so
-                  define it for any agent with a TUI.
+                  the last non-blank row (at least the last 50 lines
+                  ending there, and just those for a terminal no window
+                  has shown yet): `false` while the agent starts up or
+                  shows a dialog, such as a permission prompt. Without it,
+                  duet sends text as soon as the agent runs and can't tell
+                  when it is asking something, so define it for any agent
+                  with a TUI.
 - `read_input`    (optional) `fun(self, lines): string|nil`: the agent's
                   input box as shown in its terminal (given the same lines
                   as `is_ready`), or `nil` if no input box is on screen. It
@@ -650,18 +651,19 @@ require("duet.terminal").ensure([{agent}] [, {opts}]) *duet.terminal.ensure()*
                                                      *duet-session-when_ready*
 session:when_ready({timeout_ms}, {cb})
     Call {cb} once the agent accepts input, as its adapter's `is_ready`
-    tells from the terminal's last lines (an adapter without `is_ready` is
-    ready whenever the agent runs). Checked afresh on every call, so a
-    dialog the agent shows makes it wait. {cb} gets an error message if the
-    agent is not ready after {timeout_ms} milliseconds, or exits or is
-    stopped first. `session:is_ready()` answers the same question now.
+    tells from the terminal's screen (see |duet-agents-adapter|; an adapter
+    without `is_ready` is ready whenever the agent runs). Checked afresh on
+    every call, so a dialog the agent shows makes it wait. {cb} gets an
+    error message if the agent is not ready after {timeout_ms} milliseconds,
+    or exits or is stopped first. `session:is_ready()` answers the same
+    question now.
 
                                                           *duet-session-input*
 session:input()
     What the agent's input box holds now, as its adapter's `read_input`
-    reads it from the terminal's last lines, or `nil` if no input box is on
-    screen or the adapter has no `read_input`. Returns `nil` and an error
-    message if the agent is gone or `read_input` failed.
+    reads it from the terminal's screen (see |duet-agents-adapter|), or `nil`
+    if no input box is on screen or the adapter has no `read_input`. Returns
+    `nil` and an error message if the agent is gone or `read_input` failed.
 
                                                            *duet-session-poll*
 session:poll({timeout_ms}, {check}, {cb})

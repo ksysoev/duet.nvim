@@ -35,11 +35,12 @@ local augroup
 local enlarging = false
 
 local FILETYPE = "duet_terminal"
--- Readiness polling (Session:when_ready): how often, and the fewest of the terminal's lines,
--- ending at the last non-blank one, that the adapter's is_ready and read_input see. They see the terminal's screen,
--- or READY_LINES lines if that reaches higher: the live input box is on the screen, however
--- tall typed input makes it, and reading no further keeps old boxes in the scrollback, which
--- could pass for ready while a dialog is open, out of view.
+-- Readiness polling (Session:when_ready): how often, and how many lines the adapter's
+-- is_ready and read_input see at least. They see the terminal's screen down to its last
+-- non-blank row, or the last READY_LINES lines ending there if those reach higher (also for a
+-- terminal no window has shown yet). The live input box is on the screen, however tall typed
+-- input makes it; reading no higher keeps old boxes in the scrollback, which could pass for
+-- ready while a dialog is open, out of view.
 local READY_POLL_MS = 50
 local READY_LINES = 50
 
@@ -1307,7 +1308,7 @@ local function gone(self)
 end
 
 ---Whether the agent's TUI accepts input now, as the adapter's `is_ready` tells from the
----terminal's last lines: false while it starts up or shows a dialog. An agent without
+---terminal's screen (see ready_lines): false while it starts up or shows a dialog. An agent without
 ---`is_ready` is ready whenever it runs.
 ---@return boolean|nil ready
 ---@return string|nil err the agent is gone, or the adapter's is_ready failed
@@ -1329,7 +1330,7 @@ function Session:is_ready()
 end
 
 ---What the agent's input box holds now, as the adapter's `read_input` reads it from the
----terminal's last lines: nil if no input box is on screen, or if the adapter has no
+---terminal's screen (see ready_lines): nil if no input box is on screen, or if the adapter has no
 ---`read_input`, the agent is gone, or `read_input` failed (`err` tells which of the last two).
 ---@return string|nil input
 ---@return string|nil err
