@@ -914,6 +914,139 @@ T["session"]["deleting or unloading the buffer forgets the session quietly"]["%s
   eq(child.lua_get("_G.notes"), {})
 end
 
+T["ready lines"] = MiniTest.new_set()
+
+-- Start an agent that prints "TOP", 80 more lines and "END", with an adapter whose
+-- is_ready and read_input look for "TOP" and record how many lines they got, in _G.got.
+-- `opts` go to Session.new(); with `rows`, the terminal opens in a split that tall. `script`
+-- replaces what the agent prints before "END".
+local function tall_output(opts, rows, script)
+  child.lua(
+    [[
+    local opts, rows, script = ...
+    script = script or "echo TOP; i=1; while [ $i -le 80 ]; do echo line $i; i=$((i+1)); done"
+    _G.got = {}
+    local function top(lines)
+      table.insert(_G.got, #lines)
+      return vim.tbl_contains(lines, "TOP") and "TOP" or nil
+    end
+    require("duet.agents").register({
+      name = "tall",
+      cmd = { "sh", "-c", script .. "; echo END; exec cat" },
+      capabilities = { mcp = false, plan_hook = false, system_prompt = false },
+      launch = function(self)
+        return { argv = vim.deepcopy(self.cmd), env = {}, files = {} }
+      end,
+      is_ready = function(_, lines)
+        return top(lines) ~= nil
+      end,
+      read_input = function(_, lines)
+        return top(lines)
+      end,
+    })
+    require("duet").setup({ agent = "tall" })
+    if rows then
+      vim.cmd(rows .. "split")
+      opts.win = vim.api.nvim_get_current_win()
+    end
+    _G.s = assert(T.Session.new(require("duet.agents").get("tall"), opts))
+    assert(wait(function() return text(s.id):find("END", 1, true) ~= nil end))
+  ]],
+    { opts, rows or false, script or false }
+  )
+end
+
+T["ready lines"]["see the whole screen when it is taller than READY_LINES"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("vim.api.nvim_win_get_height(s:window()) > 82"), true)
+  eq(child.lua_get("{ s:is_ready(), s:input() }"), { true, "TOP" })
+  eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["ready lines"]["are at least READY_LINES on a small screen"] = function()
+  tall_output({}, 20)
+  eq(child.lua_get("vim.api.nvim_win_get_height(s:window())"), 20)
+  eq(child.lua_get("{ s:is_ready(), s:input() == nil }"), { false, true })
+  eq(child.lua_get("_G.got"), { 50, 50 })
+end
+
+T["ready lines"]["follow the tallest window showing the terminal"] = function()
+  child.o.lines = 120
+  tall_output({}, 20)
+  child.lua("vim.cmd('tabnew'); vim.api.nvim_win_set_buf(0, s.buf)")
+  -- Neovim resizes the terminal on a later redraw and refreshes its lines after that, so
+  -- wait as a send does: until then the lines can be in the middle of a refresh.
+  eq(child.lua_get("wait(function() return s:is_ready() end)"), true)
+  eq(child.lua_get("_G.got[#_G.got]"), 82)
+end
+
+T["ready lines"]["keep the last screen height while the terminal is hidden"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("s:is_ready()"), true)
+  child.lua("s:hide()")
+  eq(child.lua_get("s:is_visible()"), false)
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["ready lines"]["start at the screen's top, not in the scrollback, above blank rows"] = function()
+  child.o.lines = 120
+  -- 200 lines scroll into the scrollback, then the screen is cleared and TOP drawn at its
+  -- top with 60 more lines below it, and blank rows under them.
+  tall_output(
+    {},
+    nil,
+    "i=1; while [ $i -le 200 ]; do echo old $i; i=$((i+1)); done; printf '\\033[2J\\033[H';"
+      .. " echo TOP; i=1; while [ $i -le 60 ]; do echo line $i; i=$((i+1)); done"
+  )
+  eq(child.lua_get("vim.api.nvim_buf_line_count(s.buf) > vim.api.nvim_win_get_height(s:window())"), true)
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 62 })
+end
+
+T["ready lines"]["leave out a winbar"] = function()
+  child.o.lines = 120
+  child.o.winbar = "bar"
+  tall_output(
+    {},
+    nil,
+    "i=1; while [ $i -le 200 ]; do echo old $i; i=$((i+1)); done; printf '\\033[2J\\033[H';"
+      .. " echo TOP; i=1; while [ $i -le 60 ]; do echo line $i; i=$((i+1)); done"
+  )
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 62 })
+end
+
+T["ready lines"]["take the height the terminal had when it was hidden"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("s:is_ready()"), true)
+  -- Shrink the terminal's window to 30 rows and hide it, with no readiness check in between.
+  child.lua("local win = s:window(); vim.cmd('new'); vim.api.nvim_win_set_height(win, 30); vim.cmd('redraw')")
+  child.lua("s:hide()")
+  eq(child.lua_get("s:is_ready()"), false)
+  eq(child.lua_get("_G.got"), { 82, 50 })
+end
+
+T["ready lines"]["leave out Neovim's autocmd window"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("s:is_ready()"), true)
+  child.lua("s:hide()")
+  eq(child.lua_get("vim.api.nvim_buf_call(s.buf, function() return s:is_ready() end)"), true)
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 82, 82, 82 })
+end
+
+T["ready lines"]["are READY_LINES for a terminal never shown"] = function()
+  child.o.lines = 120
+  tall_output({ hidden = true })
+  eq(child.lua_get("s:is_ready()"), false)
+  eq(child.lua_get("_G.got"), { 50 })
+end
+
 T["current()"] = MiniTest.new_set()
 
 T["current()"]["follows the project root"] = function()

@@ -19,6 +19,7 @@ local M = {}
 ---@field stopping boolean the job is being stopped by duet, so its exit is expected
 ---@field stopped boolean duet stopped the agent while it ran (stop, restart, wiping the buffer)
 ---@field seen_ready boolean the agent's TUI has been ready for input at least once
+---@field rows integer|nil height of the tallest window last seen showing the terminal
 local Session = {}
 Session.__index = Session
 M.Session = Session
@@ -34,10 +35,12 @@ local augroup
 local enlarging = false
 
 local FILETYPE = "duet_terminal"
--- Readiness polling (Session:when_ready): how often, and how many of the terminal's last
--- non-blank lines the adapter's is_ready sees. Few lines fail safe: missing an input box
--- only makes a send wait, but an old one in the scrollback could pass for ready while a
--- dialog is open. Claude Code shows a multi-line paste as one line, so its box stays short.
+-- Readiness polling (Session:when_ready): how often, and how many lines the adapter's
+-- is_ready and read_input see at least. They see the terminal's screen down to its last
+-- non-blank row, or the last READY_LINES lines ending there if those reach higher (also for a
+-- terminal no window has shown yet). The live input box is on the screen, however tall typed
+-- input makes it; reading no higher keeps old boxes in the scrollback, which could pass for
+-- ready while a dialog is open, out of view.
 local READY_POLL_MS = 50
 local READY_LINES = 50
 
@@ -997,6 +1000,25 @@ local function attach_links(self)
   end
 end
 
+---The terminal's screen height: Neovim sizes a terminal to the tallest window showing it, in
+---any tab, and keeps that size while no window shows it, so the height last seen stands in
+---(also recorded when the terminal leaves a window). The height leaves out a window's winbar,
+---and Neovim's autocmd window (`nvim_buf_call` on a hidden buffer) doesn't count, as in Neovim.
+---@param self duet.Session
+---@return integer rows 0 if no window has shown the terminal
+local function screen_rows(self)
+  local rows = 0
+  for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
+    if vim.fn.win_gettype(win) ~= "autocmd" then
+      rows = math.max(rows, vim.fn.getwininfo(win)[1].height)
+    end
+  end
+  if rows > 0 then
+    self.rows = rows
+  end
+  return self.rows or 0
+end
+
 ---@param self duet.Session
 local function setup_buffer(self)
   local buf = self.buf
@@ -1023,6 +1045,14 @@ local function setup_buffer(self)
       if config().auto_insert and self.job then
         vim.cmd.startinsert()
       end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWinLeave", {
+    group = augroup,
+    buffer = buf,
+    desc = "duet: remember the terminal's height while it is hidden",
+    callback = function()
+      screen_rows(self)
     end,
   })
   -- BufUnload comes first for :bdelete, :bunload and :bwipeout, so the session is
@@ -1221,13 +1251,17 @@ end
 
 ---The terminal's last `n` lines, trailing blank lines left out. A TUI that renders inline
 ---leaves the rows below its output blank.
+---With `rows`, the screen's height, above `n`: from the screen's top row instead, or the last
+---`n` lines if they reach higher (output that ends near the top of a tall screen).
 ---@param buf integer
 ---@param n integer
+---@param rows? integer
 ---@return string[]
-local function last_lines(buf, n)
+local function last_lines(buf, n, rows)
   -- Find the last non-blank line, reading back a block at a time: a tall terminal can
   -- have many blank rows below the output.
-  local last = vim.api.nvim_buf_line_count(buf)
+  local count = vim.api.nvim_buf_line_count(buf)
+  local last = count
   local block = 100
   while last > 0 do
     local first = math.max(0, last - block)
@@ -1242,7 +1276,19 @@ local function last_lines(buf, n)
     end
     last = first
   end
-  return vim.api.nvim_buf_get_lines(buf, math.max(0, last - n), last, false)
+  local first = last - n
+  if rows and rows > n then
+    first = math.min(first, count - rows)
+  end
+  return vim.api.nvim_buf_get_lines(buf, math.max(0, first), last, false)
+end
+
+---The terminal's lines the adapter's is_ready and read_input see: its screen down to the
+---last non-blank row, or the last READY_LINES non-blank lines if they reach higher.
+---@param self duet.Session
+---@return string[]
+local function ready_lines(self)
+  return last_lines(self.buf, READY_LINES, screen_rows(self))
 end
 
 ---Why the session's agent no longer runs in its terminal, or nil while it does.
@@ -1262,7 +1308,7 @@ local function gone(self)
 end
 
 ---Whether the agent's TUI accepts input now, as the adapter's `is_ready` tells from the
----terminal's last lines: false while it starts up or shows a dialog. An agent without
+---terminal's screen (see ready_lines): false while it starts up or shows a dialog. An agent without
 ---`is_ready` is ready whenever it runs.
 ---@return boolean|nil ready
 ---@return string|nil err the agent is gone, or the adapter's is_ready failed
@@ -1273,7 +1319,7 @@ function Session:is_ready()
   end
   local ready = true
   if self.agent.is_ready then
-    local ok, result = pcall(self.agent.is_ready, self.agent, last_lines(self.buf, READY_LINES))
+    local ok, result = pcall(self.agent.is_ready, self.agent, ready_lines(self))
     if not ok then
       return nil, ("terminal: %s is_ready failed: %s"):format(self.agent.name, result)
     end
@@ -1284,7 +1330,7 @@ function Session:is_ready()
 end
 
 ---What the agent's input box holds now, as the adapter's `read_input` reads it from the
----terminal's last lines: nil if no input box is on screen, or if the adapter has no
+---terminal's screen (see ready_lines): nil if no input box is on screen, or if the adapter has no
 ---`read_input`, the agent is gone, or `read_input` failed (`err` tells which of the last two).
 ---@return string|nil input
 ---@return string|nil err
@@ -1296,7 +1342,7 @@ function Session:input()
   if err then
     return nil, err
   end
-  local ok, result = pcall(self.agent.read_input, self.agent, last_lines(self.buf, READY_LINES))
+  local ok, result = pcall(self.agent.read_input, self.agent, ready_lines(self))
   if not ok then
     return nil, ("terminal: %s read_input failed: %s"):format(self.agent.name, result)
   end
