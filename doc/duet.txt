@@ -705,11 +705,11 @@ goes into a dialog, such as a permission prompt, where <Enter> would answer
 it. If the agent's terminal is hidden while it asks something, duet shows
 it, without moving the cursor.
 
-Claude Code marks a dialog's selected choice with `❯` at the start of a row.
-A custom `statusLine` may hold a `❯` after other text (`~/dev ❯ main`), but
-one that starts with `❯`, or with a vertical bar and then `❯` (`│ ❯ main`),
-looks like a dialog's choice, so the agent never seems ready and every send
-times out.
+Claude Code marks a dialog's selected choice with `❯`, with only spaces,
+borders or other symbols before it. A custom `statusLine` may hold a `❯`
+after a word (`~/dev ❯ main`), but one with only symbols before its first
+`❯` (`❯ main`, `│ ❯ main`) looks like a dialog's choice, so the agent never
+seems ready and every send times out.
 
 If a dialog opens after the paste but before <Enter>, the text is left in
 the agent's input without being submitted, and duet tells you and shows the

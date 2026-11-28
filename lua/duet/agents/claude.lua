@@ -186,38 +186,14 @@ local function is_footer_row(line)
   return line:match("^  ") ~= nil and not line:match("^%s*⎿")
 end
 
--- What can come before a dialog's `❯`, besides spaces: a no-break space and the vertical
--- borders a choice can sit inside (`│ ❯ Yes │`).
-local MARKER_PREFIXES = { NBSP, "│", "┃", "║", "╎", "╏", "┆", "┇", "┊", "┋" }
-
----The spaces, no-break space or vertical border at the start of `rest`, or nil.
----@param rest string
----@return string|nil
-local function leading_skip(rest)
-  local spaces = rest:match("^%s+")
-  if spaces then
-    return spaces
-  end
-  for _, prefix in ipairs(MARKER_PREFIXES) do
-    if vim.startswith(rest, prefix) then
-      return prefix
-    end
-  end
-  return nil
-end
-
----Whether `line` starts with a `❯`, after any spaces (no-break spaces too) and a dialog's
----vertical borders (`  ❯ 1. Yes`, `  │ ❯ Yes │`): where a dialog marks its selected choice.
+---Whether `line` has a `❯` with no letter or digit before it (`  ❯ 1. Yes`, `  │ ❯ Yes │`):
+---where a dialog marks its selected choice, whatever border or symbol it draws first. A
+---`❯` after a word, as in a status line (`  ~/dev ❯ main`), is not one.
 ---@param line string
 ---@return boolean
 local function starts_with_marker(line)
-  local rest = line
-  local skip = leading_skip(rest)
-  while skip do
-    rest = rest:sub(#skip + 1)
-    skip = leading_skip(rest)
-  end
-  return vim.startswith(rest, "❯")
+  local before = line:match("^(.-)❯")
+  return before ~= nil and not before:find("%w")
 end
 
 ---Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude

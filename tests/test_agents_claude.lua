@@ -794,6 +794,16 @@ local ready_cases = {
     ready = false,
   },
   {
+    name = "a choice after a block border below an old input box",
+    lines = { RULE, "❯ ", RULE, "  ▎ ❯ 1. Yes", "  ▎   2. No" },
+    ready = false,
+  },
+  {
+    name = "a choice after a scroll arrow below an old input box",
+    lines = { RULE, "❯ ", RULE, "  ↓ ❯ 4. Other" },
+    ready = false,
+  },
+  {
     name = "a choice with a no-break space after its ❯ below an old input box",
     lines = { RULE, "❯ ", RULE, "  ❯\194\160 1. Yes", "    2. No" },
     ready = false,
