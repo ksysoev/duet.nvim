@@ -255,6 +255,24 @@ function M.win_config(layout, opts, editor, title)
   return { split = layout, win = -1, width = M.split_target(opts.split.width, columns, opts.split.min_code_width) }
 end
 
+---Size of the window a layout opens, for a terminal started without one: the float's size,
+---a side split's width by the rows windows have, or a bottom split's height by the editor's
+---width. Pure.
+---@param layout "float"|"right"|"left"|"bottom"
+---@param opts table the `terminal` config
+---@param editor duet.EditorSize
+---@return integer width
+---@return integer height
+function M.layout_size(layout, opts, editor)
+  local cfg = M.win_config(layout, opts, editor)
+  if layout == "float" then
+    return cfg.width, cfg.height
+  elseif layout == "bottom" then
+    return editor.columns, cfg.height
+  end
+  return cfg.width, editor.lines
+end
+
 ---The editor area windows can use: the tabline, the command line and a status line are
 ---left out.
 ---@return duet.EditorSize
@@ -1067,7 +1085,42 @@ local function setup_buffer(self)
   })
 end
 
----Start the job in `win`, or in the hidden buffer if `win` is nil.
+---Run `fn` in a hidden float that shows the session's buffer, sized like the window the
+---layout opens, so a job started there gets that screen size: Neovim's autocmd window
+---(`nvim_buf_call()`) is only 5 rows tall. The float is opened and closed without autocmds,
+---and the size is remembered as the terminal's height (see screen_rows()). Without a float,
+---e.g. when the editor can't open one, `fn` runs in the autocmd window.
+---@param self duet.Session
+---@param fn fun(): any
+---@return boolean ok
+---@return any result `fn`'s result, or its error
+local function call_hidden(self, fn)
+  local width, height = M.layout_size(config().layout, config(), editor_size())
+  local opened, win = pcall(vim.api.nvim_open_win, self.buf, false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = width,
+    height = height,
+    hide = true,
+    focusable = false,
+    style = "minimal",
+    noautocmd = true,
+  })
+  if not opened then
+    return pcall(vim.api.nvim_buf_call, self.buf, fn)
+  end
+  -- Closing the buffer's only window would unload it, ending the job, with 'nohidden'.
+  vim.bo[self.buf].bufhidden = "hide"
+  local ok, result = pcall(vim.api.nvim_win_call, win, fn)
+  pcall(vim.cmd, ("noautocmd call nvim_win_close(%d, v:true)"):format(win))
+  if ok then
+    self.rows = height
+  end
+  return ok, result
+end
+
+---Start the job in `win`, or hidden if `win` is nil (see call_hidden()).
 ---@param self duet.Session
 ---@param plan duet.LaunchPlan
 ---@param win integer|nil
@@ -1090,7 +1143,7 @@ local function spawn(self, plan, win)
   if win then
     ok, job = pcall(vim.api.nvim_win_call, win, run)
   else
-    ok, job = pcall(vim.api.nvim_buf_call, self.buf, run)
+    ok, job = call_hidden(self, run)
   end
   if not ok then
     return nil, ("terminal: cannot start %s: %s"):format(self.agent.name, (tostring(job):gsub("^Vim:", "")))

@@ -1040,11 +1040,83 @@ T["ready lines"]["leave out Neovim's autocmd window"] = function()
   eq(child.lua_get("_G.got"), { 82, 82, 82 })
 end
 
-T["ready lines"]["are READY_LINES for a terminal never shown"] = function()
+T["ready lines"]["take the layout's height for a terminal never shown"] = function()
   child.o.lines = 120
   tall_output({ hidden = true })
-  eq(child.lua_get("s:is_ready()"), false)
-  eq(child.lua_get("_G.got"), { 50 })
+  eq(child.lua_get("s:is_visible()"), false)
+  eq(child.lua_get("{ s:is_ready(), s:input() }"), { true, "TOP" })
+  eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["hidden start"] = MiniTest.new_set()
+
+-- An agent that prints its terminal's size as "SIZE <rows> <cols>", then waits.
+local STTY = { "sh", "-c", "echo SIZE $(stty size); exec cat" }
+
+-- The size the hidden session's agent saw, as { rows, cols }.
+local function hidden_size()
+  return child.lua([[
+    local s = assert(T.Session.new(require("duet.agents").get("fake"), { hidden = true }))
+    _G.s = s
+    assert(wait(function() return text(s.id):find("SIZE %d+ %d+") ~= nil end))
+    local rows, cols = text(s.id):match("SIZE (%d+) (%d+)")
+    return { tonumber(rows), tonumber(cols) }
+  ]])
+end
+
+T["hidden start"]["sizes the terminal like the layout's window"] = MiniTest.new_set({
+  parametrize = { { "right" }, { "left" }, { "bottom" }, { "float" } },
+})
+
+T["hidden start"]["sizes the terminal like the layout's window"]["%s"] = function(layout)
+  fake("fake", STTY, {}, { terminal = { layout = layout } })
+  local size = hidden_size()
+  local cfg = child.lua([[
+    local c = require("duet.config").get().terminal
+    local lines = vim.o.lines - vim.o.cmdheight - 1
+    return { T.layout_size(c.layout, c, { columns = vim.o.columns, lines = lines }) }
+  ]])
+  eq(size, { cfg[2], cfg[1] })
+  eq(size[1] > 5, true)
+end
+
+T["hidden start"]["leaves no window behind and fires no window autocmds"] = function()
+  fake("fake", STTY)
+  child.lua([[
+    _G.events = {}
+    vim.api.nvim_create_autocmd(
+      { "WinNew", "WinEnter", "WinLeave", "WinClosed", "BufEnter", "BufLeave", "BufWinEnter", "BufWinLeave", "BufHidden" },
+      { callback = function(a) table.insert(_G.events, a.event) end }
+    )
+    _G.wins = #vim.api.nvim_list_wins()
+  ]])
+  hidden_size()
+  eq(child.lua_get("_G.events"), {})
+  eq(child.lua_get("#vim.api.nvim_list_wins() == _G.wins"), true)
+  eq(child.lua_get("vim.fn.win_findbuf(s.buf)"), {})
+  eq(child.lua_get("s:is_visible()"), false)
+  eq(child.lua_get("running(s.job)"), true)
+end
+
+T["hidden start"]["keeps the job with 'nohidden'"] = function()
+  child.o.hidden = false
+  fake("fake", STTY)
+  local size = hidden_size()
+  eq(size[1] > 5, true)
+  eq(
+    child.lua_get("{ vim.api.nvim_buf_is_loaded(s.buf), running(s.job), vim.bo[s.buf].bufhidden }"),
+    { true, true, "hide" }
+  )
+end
+
+T["hidden start"]["restart of a hidden session keeps the size"] = function()
+  fake("fake", STTY)
+  hidden_size()
+  child.lua("_G.s = assert(s:restart())")
+  child.lua([[assert(wait(function() return text(s.id):find("SIZE %d+ %d+") ~= nil end))]])
+  local rows = child.lua_get([[tonumber(text(s.id):match("SIZE (%d+)"))]])
+  eq(rows, child.lua_get("vim.o.lines - vim.o.cmdheight - 1"))
+  eq(child.lua_get("s:is_visible()"), false)
 end
 
 T["current()"] = MiniTest.new_set()
@@ -1807,6 +1879,29 @@ for _, case in ipairs(geometry_cases) do
     h.reset_modules()
     local editor = vim.tbl_extend("force", { columns = 100, lines = 40 }, case.editor or {})
     eq(require("duet.terminal").win_config(case.layout, case.opts, editor, " t "), case.expected)
+  end
+end
+
+local layout_size_cases = {
+  { name = "float without its border", layout = "float", opts = OPTS, expected = { 49, 19 } },
+  { name = "right split, window rows", layout = "right", opts = OPTS, expected = { 40, 40 } },
+  { name = "left split, capped", layout = "left", opts = ABSOLUTE, editor = { columns = 80 }, expected = { 59, 40 } },
+  { name = "bottom split, editor width", layout = "bottom", opts = OPTS, expected = { 100, 10 } },
+  {
+    name = "bottom split, capped",
+    layout = "bottom",
+    opts = ABSOLUTE,
+    editor = { lines = 20 },
+    expected = { 100, 14 },
+  },
+}
+
+T["layout_size()"] = MiniTest.new_set()
+for _, case in ipairs(layout_size_cases) do
+  T["layout_size()"][case.name] = function()
+    h.reset_modules()
+    local editor = vim.tbl_extend("force", { columns = 100, lines = 40 }, case.editor or {})
+    eq({ require("duet.terminal").layout_size(case.layout, case.opts, editor) }, case.expected)
   end
 end
 
