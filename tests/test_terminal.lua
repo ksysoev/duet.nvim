@@ -975,8 +975,10 @@ T["ready lines"]["follow the tallest window showing the terminal"] = function()
   child.o.lines = 120
   tall_output({}, 20)
   child.lua("vim.cmd('tabnew'); vim.api.nvim_win_set_buf(0, s.buf)")
-  eq(child.lua_get("s:is_ready()"), true)
-  eq(child.lua_get("_G.got"), { 82 })
+  -- Neovim resizes the terminal on a later redraw and refreshes its lines after that, so
+  -- wait as a send does: until then the lines can be in the middle of a refresh.
+  eq(child.lua_get("wait(function() return s:is_ready() end)"), true)
+  eq(child.lua_get("_G.got[#_G.got]"), 82)
 end
 
 T["ready lines"]["keep the last screen height while the terminal is hidden"] = function()
