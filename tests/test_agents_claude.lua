@@ -647,6 +647,42 @@ local ready_cases = {
     lines = { RULE, "❯ old", RULE, RULE, " Press Enter to continue", "" },
     ready = false,
   },
+  {
+    name = "an old box without a closing rule above a dialog's text",
+    lines = { RULE, "❯ old", " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box without a closing rule above newer output",
+    lines = { RULE, "❯ old", "⏺ Done." },
+    ready = false,
+  },
+  {
+    name = "a multi-line input cut off at the bottom",
+    lines = { RULE, "❯\194\160line one", "  line two", "" },
+    ready = true,
+  },
+  -- Footer rows below the live box, as Claude Code 2.1.330 draws them.
+  {
+    name = "the live box with a status line and the mode footer",
+    lines = { RULE, "❯\194\160", RULE, "  [Opus] ~/dev/duet main", "  ⏵⏵ auto mode on (shift+tab to cycle)" },
+    ready = true,
+  },
+  {
+    name = "the live box with the shortcuts hint and a notice",
+    lines = { RULE, "❯\194\160", RULE, "  ? for shortcuts", "  ⚠ Transcript saving is off", "" },
+    ready = true,
+  },
+  {
+    name = "the live box with the file picker open",
+    lines = { RULE, "❯\194\160@a", RULE, "  @ a.lua", "    b/a.txt" },
+    ready = true,
+  },
+  {
+    name = "the live box with a right-aligned hint",
+    lines = { RULE, "❯\194\160", RULE, "  ⏸ manual mode on", string.rep(" ", 70) .. "ctrl+y to paste deleted text" },
+    ready = true,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({

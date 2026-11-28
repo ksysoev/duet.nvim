@@ -304,18 +304,21 @@ end
 ---older box can sit between the last `❯` and it. It counts only if just footer rows follow
 ---the box's closing rule (see is_footer_row): a dialog that marks no choice with `❯`, such
 ---as `Press Enter to continue`, or newer output can sit below an older box. A box cut off
----at the bottom, with no closing rule, counts. nil if there is none.
+---at the bottom, with no closing rule, counts only if its later lines are indented like
+---the rest of a multi-line input (two spaces). nil if there is none.
 ---@param lines string[]
 ---@return integer|nil
 local function live_prompt(lines)
   for i = #lines, math.max(2, last_marker(lines)), -1 do
     if is_prompt(lines[i]) and is_rule(lines[i - 1]) then
+      local close = i
       for j = i + 1, #lines do
         if is_rule(lines[j]) then
-          return only_footer_below(lines, j) and i or nil
+          close = j
+          break
         end
       end
-      return i
+      return only_footer_below(lines, close) and i or nil
     end
   end
   return nil
