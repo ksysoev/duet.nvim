@@ -730,6 +730,120 @@ T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the 
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
 end
 
+---Show `file` (an unnamed buffer when nil) in the current window with 'nohidden', run
+---`setup`, then change the buffer without saving. Returns the window.
+---@param file? string
+---@param setup? string Lua run before the change
+---@return integer
+local function show_modified(file, setup)
+  child.cmd(file and ("edit " .. file) or "enew")
+  child.o.hidden = false
+  if setup then
+    child.lua(setup)
+  end
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'changed' })")
+  eq(child.bo.modified, true)
+  return child.lua_get("vim.api.nvim_get_current_win()")
+end
+
+T["terminal"]["a code window whose buffer can't be left"] = MiniTest.new_set()
+
+-- Each leaves `:edit` failing with E37 in the window, as a headless check against
+-- Neovim's can_abandon() shows.
+T["terminal"]["a code window whose buffer can't be left"]["is skipped for a split"] = MiniTest.new_set({
+  parametrize = {
+    { "'nohidden'", "b.lua", nil },
+    { "'bufhidden' wipe over 'hidden'", "b.lua", "vim.o.hidden = true; vim.bo.bufhidden = 'wipe'" },
+    { "'bufhidden' delete over 'hidden'", "b.lua", "vim.o.hidden = true; vim.bo.bufhidden = 'delete'" },
+    { "'bufhidden' unload over 'hidden'", "b.lua", "vim.o.hidden = true; vim.bo.bufhidden = 'unload'" },
+    { "'autowrite', which :edit ignores", "b.lua", "vim.o.autowrite = true" },
+    { "'autowriteall' on a read-only buffer", "b.lua", "vim.o.autowriteall = true; vim.bo.readonly = true" },
+    { "'autowriteall' with 'nowrite'", "b.lua", "vim.o.autowriteall = true; vim.o.write = false" },
+    { "'autowriteall' on an unnamed buffer", nil, "vim.o.autowriteall = true" },
+  },
+})
+
+T["terminal"]["a code window whose buffer can't be left"]["is skipped for a split"]["with %s"] = function(
+  _,
+  file,
+  setup
+)
+  local code = show_modified(file, setup)
+  local buf = child.lua_get("vim.api.nvim_get_current_buf()")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.v.errmsg"), "")
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { code }), true)
+  -- The change is still there, unsaved, in its window.
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { code }), buf)
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(..., 0, -1, false)", { buf }), { "changed" })
+  eq(child.lua_get("vim.bo[...].modified", { buf }), true)
+  eq(vim.fn.readfile(root .. "/b.lua"), { "b" })
+end
+
+T["terminal"]["a code window whose buffer can't be left"]["is skipped for a start screen"] = function()
+  local code = show_modified("b.lua")
+  local dashboard = screen("alpha", "botright new")
+  agent("printf 'a.lua:1\\n'")
+  follow_from(code)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), dashboard)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+end
+
+T["terminal"]["a code window whose buffer can't be left"]["is skipped for another code window"] = function()
+  local free = show_code("c.lua")
+  child.cmd("split")
+  local code = show_modified("b.lua")
+  agent("printf 'a.lua:1\\n'")
+  -- The modified window is the previous one, and comes first in the tab.
+  follow_from(code)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), free)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+end
+
+T["terminal"]["a code window whose buffer can't be left"]["is used when it shows the file"] = function()
+  local code = show_modified("lua/duet/init.lua")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, vim.split(('x\\n'):rep(20), '\\n'))")
+  agent("printf 'lua/duet/init.lua:7\\n'")
+  child.lua("cursor_on('init.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+  eq(child.lua_get("vim.fn.line('.')"), 7)
+  eq(child.lua_get("vim.bo.modified"), true)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+end
+
+T["terminal"]["a modified code window that can be left"] = MiniTest.new_set({
+  parametrize = {
+    { "'hidden'", "vim.o.hidden = true" },
+    { "'bufhidden' hide", "vim.bo.bufhidden = 'hide'" },
+    { "'autowriteall'", "vim.o.autowriteall = true" },
+    -- Neovim keeps a buffer shown in another window, in any tab.
+    { "the buffer in another tab", "vim.cmd('tab split | tabprevious')" },
+  },
+})
+
+T["terminal"]["a modified code window that can be left"]["is used with %s"] = function(kind, setup)
+  local code = show_modified("b.lua", setup)
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  if kind == "'autowriteall'" then
+    eq(vim.fn.readfile(root .. "/b.lua"), { "changed" })
+  end
+end
+
 T["terminal"]["a start screen is replaced"] = MiniTest.new_set({
   parametrize = { { "snacks_dashboard" }, { "alpha" }, { "dashboard" }, { "ministarter" }, { "startify" } },
 })

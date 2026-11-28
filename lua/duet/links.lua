@@ -845,10 +845,34 @@ local function shows(win, abs)
   return real ~= nil and real == vim.uv.fs_realpath(abs)
 end
 
+---Whether `:edit` may leave the buffer `win` shows, as Neovim decides: it is not
+---modified, it is shown in another window too, or 'bufhidden' (else 'hidden') lets it
+---be hidden, or 'autowriteall' can write it. Otherwise `:edit` fails with E37 (or asks,
+---with 'confirm').
+---@param win integer
+---@return boolean
+local function can_leave(win)
+  local buf = vim.api.nvim_win_get_buf(win)
+  if not vim.bo[buf].modified or #vim.fn.win_findbuf(buf) > 1 then
+    return true
+  end
+  local bufhidden = vim.bo[buf].bufhidden
+  if bufhidden == "hide" then
+    return true
+  end
+  if bufhidden == "" and vim.o.hidden then
+    return true
+  end
+  -- 'autowrite' alone does not apply to `:edit`. Neovim never autowrites a read-only or
+  -- unnamed buffer, or with 'nowrite'.
+  return vim.o.autowriteall and vim.o.write and not vim.bo[buf].readonly and vim.api.nvim_buf_get_name(buf) ~= ""
+end
+
 ---The window to open `abs` in: a code window in the tab, else a start screen window,
----else a new split. A code window that sets 'winfixbuf' is skipped unless it already
----shows the file, as `:edit` would fail there. A floating duet terminal in front is
----hidden first, so the file is not opened under it.
+---else a new split. A code window is skipped unless it already shows the file when
+---`:edit` would fail there: it sets 'winfixbuf', or its buffer can't be left (see
+---can_leave()). A floating duet terminal in front is hidden first, so the file is not
+---opened under it.
 ---@param abs string normalized absolute path
 ---@return integer|nil win
 ---@return duet.links.Undo undo
@@ -870,7 +894,7 @@ local function target_window(abs)
     end
   end
   local win, found = util.code_window(function(w)
-    return not vim.wo[w].winfixbuf or shows(w, abs)
+    return shows(w, abs) or (not vim.wo[w].winfixbuf and can_leave(w))
   end)
   if found then
     return win, undo
