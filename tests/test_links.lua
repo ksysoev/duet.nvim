@@ -1052,14 +1052,48 @@ T["terminal"]["a code window where :edit fails"]["is not left after Quit at the 
   eq(child.lua_get("vim.api.nvim_win_get_cursor(...)", { code }), { 20, 2 })
   local flashed = [[#vim.api.nvim_buf_get_extmarks(..., vim.api.nvim_create_namespace("duet.links.flash"), 0, -1, {})]]
   eq(child.lua_get(flashed, { buf }), 0)
+  -- Nor the buffer `:edit` made for it, unloaded.
+  eq(child.lua_get("vim.fn.bufnr(...)", { root .. "/a.lua" }), -1)
 end
 
-T["terminal"]["a file not opened after Quit at the swap file prompt"] = MiniTest.new_set({
-  parametrize = { { "no code window" }, { "a start screen" } },
+T["terminal"]["a code window on an empty buffer"] = MiniTest.new_set({
+  parametrize = { { "Quit", "q" }, { "Abort", "a" } },
 })
 
-T["terminal"]["a file not opened after Quit at the swap file prompt"]["leaves the layout with %s"] = function(kind)
-  swap_file("q")
+T["terminal"]["a code window on an empty buffer"]["keeps its context mark and alternate file after %s"] = function(
+  _,
+  choice
+)
+  -- The first window's empty buffer, which `:edit` reuses (renames) for the file.
+  swap_file(choice)
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  eq(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { code }), "")
+  local alt, mark = child.lua_get(ALT, { code }), child.lua_get(MARK, { code })
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(#child.lua_get(REPORTED), 1)
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get(ALT, { code }), alt)
+  eq(child.lua_get(MARK, { code }), mark)
+  eq(child.lua_get("vim.fn.bufnr(...)", { root .. "/a.lua" }), -1)
+  eq(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { code }), "")
+end
+
+T["terminal"]["a file not opened at the swap file prompt"] = MiniTest.new_set({
+  parametrize = {
+    { "Quit", "no code window" },
+    { "Quit", "a start screen" },
+    { "Abort", "no code window" },
+    { "Abort", "a start screen" },
+  },
+})
+
+T["terminal"]["a file not opened at the swap file prompt"]["after %s leaves the layout with %s"] = function(
+  answer,
+  kind
+)
+  swap_file(answer == "Quit" and "q" or "a")
   local dashboard = kind == "a start screen" and screen("alpha") or nil
   agent("printf 'a.lua:1\\n'")
   child.lua("cursor_on('a.lua')")
@@ -1067,10 +1101,14 @@ T["terminal"]["a file not opened after Quit at the swap file prompt"]["leaves th
     child.lua("vim.cmd('only')")
   end
   local before = child.lua_get("#vim.api.nvim_tabpage_list_wins(0)")
+  local bufs = child.lua_get("vim.api.nvim_list_bufs()")
   child.type_keys("gf")
   eq(child.lua_get("_G.prompts"), 1)
-  eq(child.lua_get(REPORTED), { "[duet] links: cannot open 'a.lua': :edit did not open it" })
+  local err = answer == "Quit" and ":edit did not open it" or "Keyboard interrupt"
+  eq(child.lua_get(REPORTED), { "[duet] links: cannot open 'a.lua': " .. err })
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+  -- No buffer is left for the file, nor an empty one for the split.
+  eq(child.lua_get("vim.api.nvim_list_bufs()"), bufs)
   eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
   if dashboard then
     eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].filetype", { dashboard }), "alpha")
@@ -1116,6 +1154,7 @@ T["terminal"]["a code window where :edit fails"]["keeps its context mark and alt
   eq(#child.lua_get(REPORTED), 1)
   eq(child.lua_get(ALT, { code }), alt)
   eq(child.lua_get(MARK, { code }), mark)
+  eq(child.lua_get("vim.fn.bufnr(...)", { root .. "/a.lua" }), -1)
   if alt ~= -1 then
     eq(child.lua_get("vim.bo[...].buflisted", { alt }), false)
   end

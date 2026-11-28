@@ -991,8 +991,8 @@ end
 
 ---Open `abs` in the window target_window() picks, which is then current. When `:edit`
 ---fails, or does not open the file (Quit at the swap file's ATTENTION prompt), the
----layout is put back as it was. A window that kept its buffer also keeps its context
----mark and alternate file, and the unlisted buffer `:edit` made for the file goes.
+---layout is put back as it was. A window the file is not shown in also keeps its
+---context mark and alternate file, and the buffer `:edit` left for the file goes.
 ---@param abs string normalized absolute path
 ---@param jump boolean add a jump even when the window already shows the file
 ---@param exclude? table<integer, true> code windows not to use (see target_window())
@@ -1034,32 +1034,35 @@ local function open_in_window(abs, jump, exclude)
   end
   local shown = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) or nil
   local kept = shown == buf and vim.api.nvim_buf_get_name(buf) == name
-  -- When the window did leave its buffer, that one is the alternate file, as `:edit` sets
-  -- it (setreg() does not list it). Not when `:edit` reused the buffer (an empty one,
-  -- renamed).
-  if shown and shown ~= buf and vim.api.nvim_buf_is_valid(buf) then
+  -- Whether the file is not shown in the window: it kept its buffer, or Quit or Abort at
+  -- the swap file's ATTENTION prompt left the file's buffer unloaded, and the window a new
+  -- empty one when `:edit` had reused its own (an empty one, renamed).
+  local not_shown = kept
+    or (not (shown and vim.api.nvim_buf_is_loaded(shown) and names_file(shown, abs)) and not_loaded(abs))
+  -- When the window did leave its buffer for the file, that one is the alternate file, as
+  -- `:edit` sets it (setreg() does not list it).
+  if not not_shown and shown ~= buf and vim.api.nvim_buf_is_valid(buf) then
     vim.api.nvim_win_call(win, function()
       vim.fn.setreg("#", buf)
     end)
   end
-  -- Quit at the swap file's ATTENTION prompt: `:edit` returns, but leaves the file's buffer
-  -- unloaded. The window shows its buffer again, or a new empty one when `:edit` had
-  -- reused its own.
-  local quit = ok and not kept and not_loaded(abs)
-  if ok and not kept and not quit then
+  if ok and not not_shown then
     return win
   end
   if ok then
+    -- Quit at the swap file's ATTENTION prompt.
     edit_err = ":edit did not open it"
   end
-  if kept then
-    -- `:edit` may have made an unlisted buffer for the file before it failed: it goes, so
-    -- the next attempt, and what it leaves when it fails, is as this one would have been.
+  if not_shown then
+    -- `:edit` may have made a buffer for the file before it failed, or renamed the
+    -- window's own: an unlisted one, or one it left unloaded (Quit or Abort at the swap
+    -- file's ATTENTION prompt). It goes, so the next attempt, and what it leaves when it
+    -- fails, is as this one would have been.
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
       if
-        not bufs[b]
+        (not bufs[b] or b == buf)
         and names_file(b, abs)
-        and not vim.bo[b].buflisted
+        and (not vim.bo[b].buflisted or not vim.api.nvim_buf_is_loaded(b))
         and not vim.bo[b].modified
         and #vim.fn.win_findbuf(b) == 0
       then
@@ -1067,13 +1070,15 @@ local function open_in_window(abs, jump, exclude)
       end
     end
     -- The window's previous context mark is put back too: the file was never shown there.
-    vim.api.nvim_win_call(win, function()
-      vim.fn.setpos("''", context)
-    end)
+    if shown then
+      vim.api.nvim_win_call(win, function()
+        vim.fn.setpos("''", context)
+      end)
+    end
   end
   restore_layout(undo)
   if
-    quit
+    not_shown
     and shown
     and not bufs[shown]
     and vim.api.nvim_buf_is_valid(shown)
@@ -1081,7 +1086,7 @@ local function open_in_window(abs, jump, exclude)
     and not vim.bo[shown].modified
     and #vim.fn.win_findbuf(shown) == 0
   then
-    -- The empty buffer Quit left in place of the one `:edit` reused.
+    -- The empty buffer Quit or Abort left in place of the one `:edit` reused.
     pcall(vim.api.nvim_buf_delete, shown, { force = true })
   end
   -- A failure after `:edit` left the buffer (e.g. in BufReadCmd) is the file's: the

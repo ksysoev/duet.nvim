@@ -875,7 +875,7 @@ on for each one that fails, then in a start screen or a split as below. The
 error is reported only when the last try fails too. An interrupt (CTRL-C, or
 Abort at the swap file's |ATTENTION| prompt) or Quit at that prompt is
 reported at once. A window where the file did not open is left as it was,
-with its '' mark and |alternate-file|.
+with its '' mark and |alternate-file|, and no buffer is left for the file.
 (|duet-context|'s `{file}` still refers to a skipped window.) A floating
 terminal is hidden first, so the file isn't behind it. With no such window,
 the file replaces a start screen, as |:edit| would: a window whose filetype is
