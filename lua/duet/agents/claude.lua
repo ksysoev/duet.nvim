@@ -151,6 +151,7 @@ local function rule_width(line)
   return rest == "" and width or 0
 end
 
+---Whether `line` is a horizontal rule (see rule_width).
 ---@param line string
 ---@return boolean
 local function is_rule(line)
@@ -185,13 +186,29 @@ local function is_footer_row(line)
   return line:match("^  ") ~= nil and not line:match("^%s*⎿")
 end
 
----Whether only footer rows (see is_footer_row) follow line `j`.
----@param lines string[]
----@param j integer
+---Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude
+---Code puts a no-break space after the `❯` of the live input box (a plain space in the
+---transcript and the menu).
+---@param line string
 ---@return boolean
-local function only_footer_below(lines, j)
-  for k = j + 1, #lines do
-    if not is_footer_row(lines[k]) then
+local function holds_command(line)
+  return vim.startswith(line, "❯ /") or vim.startswith(line, "❯" .. NBSP .. "/")
+end
+
+---Whether only footer rows (see is_footer_row) follow the closing rule at `close` of the
+---input box whose prompt line is `prompt`. A `❯` in those rows marks a dialog's choice,
+---unless it is the selected entry of the slash-command menu (`  ❯ /clear   Start a new
+---session…`, indented by two spaces) below a box that holds a slash command.
+---@param lines string[]
+---@param prompt string the box's prompt line
+---@param close integer
+---@return boolean
+local function only_footer_below(lines, prompt, close)
+  for k = close + 1, #lines do
+    local line = lines[k]
+    if not is_footer_row(line) then
+      return false
+    elseif line:find("❯", 1, true) and not (line:match("^  ❯ /%S") and holds_command(prompt)) then
       return false
     end
   end
@@ -200,8 +217,8 @@ end
 
 ---The live input box at the bottom of the screen: the index of its prompt line (see
 ---is_prompt) and of its closing rule. The box is found from the bottom: its closing rule
----is the last rule on screen, with only footer rows below it (see is_footer_row), and its
----top rule is the nearest rule above with the same width, with the prompt line right
+---is the last rule on screen, with only footer rows below it (see only_footer_below), and
+---its top rule is the nearest rule above with the same width, with the prompt line right
 ---below it. The lines between are the user's input, so a `❯` there (a pasted shell
 ---prompt) or a narrower rule (pasted box-drawing text or Claude Code output) is just text.
 ---An older box left above a dialog or newer output doesn't count: the dialog's rule or the
@@ -234,14 +251,12 @@ local function live_box(lines)
     end
     return close + 1, nil
   end
-  if not only_footer_below(lines, close) then
-    return nil
-  end
   local width = rule_width(lines[close])
   for i = close - 1, 1, -1 do
     if rule_width(lines[i]) == width then
-      if i + 1 < close and is_prompt(lines[i + 1]) then
-        return i + 1, close
+      local prompt = i + 1
+      if prompt < close and is_prompt(lines[prompt]) and only_footer_below(lines, lines[prompt], close) then
+        return prompt, close
       end
       return nil
     end

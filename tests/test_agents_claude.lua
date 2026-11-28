@@ -753,6 +753,16 @@ local ready_cases = {
     ready = false,
   },
   { name = "two rules with nothing between them", lines = { RULE, RULE, "  ⏵⏵ auto mode on" }, ready = false },
+  {
+    name = "a choice indented by two spaces below an old input box",
+    lines = { RULE, "❯ ", RULE, "  ❯ 1. Yes", "    2. No" },
+    ready = false,
+  },
+  {
+    name = "a slash-command choice below a box that holds no command",
+    lines = { RULE, "❯\194\160hello", RULE, "  ❯ /clear   Start a new session" },
+    ready = false,
+  },
   -- Captured from Claude Code 2.1.330 in an 80-column Neovim terminal: a paste of rules
   -- and a `❯` line, expanded. Later lines are indented by two spaces and wrapped.
   { name = "pasted rules and a ❯, as Claude Code shows them", lines = PASTED, ready = true },
