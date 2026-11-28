@@ -1152,7 +1152,8 @@ local multiclick_ns = vim.api.nvim_create_namespace("duet.links.multiclick")
 ---@field at integer when that press came (|vim.uv.hrtime()|)
 ---@field pos table where the first press was (|getmousepos()|)
 ---@field in_press boolean between a press it keeps and that press's release
----@field taken? string the press (raw key) a mapping took last; unless that mapping is
+---@field buf integer the buffer clicked, a duet terminal
+---@field taken? { count: integer } the press a mapping took last; unless that mapping is
 ---click() for it (see take_multiclick()), the next key ends the click
 
 ---@type duet.links.Multiclick|nil
@@ -1206,6 +1207,7 @@ local function keep_multiclick(lhs)
     last = first.count,
     at = vim.uv.hrtime(),
     pos = vim.fn.getmousepos(),
+    buf = vim.api.nvim_get_current_buf(),
     in_press = false,
   }
   vim.on_key(function(key, typed)
@@ -1232,7 +1234,7 @@ local function keep_multiclick(lhs)
         keep_press(multi, k)
         return ""
       end
-      multi.taken = typed -- a mapping takes it, and runs next
+      multi.taken = k -- a mapping takes it, and runs next
       return nil
     end
     end_multiclick() -- another key, such as a new click
@@ -1247,7 +1249,15 @@ end
 ---@return boolean
 local function take_multiclick(lhs)
   local k = mouse_key(vim.keycode(lhs))
-  if not (multi and k and multi.taken == vim.keycode(lhs)) then
+  local taken = multi and multi.taken
+  if
+    not (k and taken)
+    or k.kind ~= "Mouse"
+    or k.button ~= multi.button
+    or k.mods ~= multi.mods
+    or k.count ~= taken.count
+    or vim.api.nvim_get_current_buf() ~= multi.buf
+  then
     return false
   end
   keep_press(multi, k)
