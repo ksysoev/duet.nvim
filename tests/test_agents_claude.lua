@@ -625,8 +625,8 @@ local ready_cases = {
     ready = true,
   },
   {
-    name = "a box with a ❯ on a later line, cut off at the bottom above a blank line",
-    lines = { RULE, "❯\194\160first", "  a ❯ b", "" },
+    name = "a box with a blank line and a ❯ on a later line, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "", "  a ❯ b" },
     ready = true,
   },
   -- A row that starts with a `❯` below a box cut off at the bottom can't be told from a
