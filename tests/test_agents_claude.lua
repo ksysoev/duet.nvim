@@ -622,7 +622,44 @@ local ready_cases = {
   {
     name = "a box with a ❯ on a later line, cut off at the bottom",
     lines = { RULE, "❯\194\160first", "  a ❯ b" },
+    ready = true,
+  },
+  {
+    name = "a box with a blank line and a ❯ on a later line, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "", "  a ❯ b" },
+    ready = true,
+  },
+  -- A row that starts with a `❯` below a box cut off at the bottom can't be told from a
+  -- dialog's choice.
+  {
+    name = "a choice indented by two spaces below a box cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  ❯ 1. Yes", "    2. No" },
     ready = false,
+  },
+  {
+    name = "a later line starting with a ❯, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  ❯ ls" },
+    ready = false,
+  },
+  {
+    name = "a bordered choice indented by two spaces below a box cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  │ ❯ 1. Yes   │", "  │   2. No    │" },
+    ready = false,
+  },
+  {
+    name = "a bordered choice without a number below a box cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  │ ❯ Yes, allow │", "  │   No         │" },
+    ready = false,
+  },
+  {
+    name = "a choice in a heavy border, a no-break space after its ❯, below a cut-off box",
+    lines = { RULE, "❯\194\160first", "  ┃ ❯\194\160 1. Yes ┃", "  ┃   2. No   ┃" },
+    ready = false,
+  },
+  {
+    name = "a box with a ❯ before a number on a later line, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  took ❯ 2.5 seconds" },
+    ready = true,
   },
   -- An old input box whose closing rule has newer content below it, with no `❯` after it.
   {
@@ -828,6 +865,11 @@ local input_cases = {
     name = "a box cut off at the bottom",
     lines = { R80, "❯" .. NBSP .. "line one", "  line two" },
     input = "❯" .. NBSP .. "line one\n  line two",
+  },
+  {
+    name = "a box with a ❯ on a later line, cut off at the bottom",
+    lines = { R80, "❯" .. NBSP .. "first", "  a ❯ b" },
+    input = "❯" .. NBSP .. "first\n  a ❯ b",
   },
   { name = "shell mode", lines = { R80, "!" .. NBSP .. "ls", R80 }, input = "!" .. NBSP .. "ls" },
   {
