@@ -918,11 +918,13 @@ T["ready lines"] = MiniTest.new_set()
 
 -- Start an agent that prints "TOP", 80 more lines and "END", with an adapter whose
 -- is_ready and read_input look for "TOP" and record how many lines they got, in _G.got.
--- `opts` go to Session.new(); with `rows`, the terminal opens in a split that tall.
-local function tall_output(opts, rows)
+-- `opts` go to Session.new(); with `rows`, the terminal opens in a split that tall. `script`
+-- replaces what the agent prints before "END".
+local function tall_output(opts, rows, script)
   child.lua(
     [[
-    local opts, rows = ...
+    local opts, rows, script = ...
+    script = script or "echo TOP; i=1; while [ $i -le 80 ]; do echo line $i; i=$((i+1)); done"
     _G.got = {}
     local function top(lines)
       table.insert(_G.got, #lines)
@@ -930,7 +932,7 @@ local function tall_output(opts, rows)
     end
     require("duet.agents").register({
       name = "tall",
-      cmd = { "sh", "-c", "echo TOP; i=1; while [ $i -le 80 ]; do echo line $i; i=$((i+1)); done; echo END; exec cat" },
+      cmd = { "sh", "-c", script .. "; echo END; exec cat" },
       capabilities = { mcp = false, plan_hook = false, system_prompt = false },
       launch = function(self)
         return { argv = vim.deepcopy(self.cmd), env = {}, files = {} }
@@ -950,7 +952,7 @@ local function tall_output(opts, rows)
     _G.s = assert(T.Session.new(require("duet.agents").get("tall"), opts))
     assert(wait(function() return text(s.id):find("END", 1, true) ~= nil end))
   ]],
-    { opts, rows }
+    { opts, rows or false, script or false }
   )
 end
 
@@ -985,6 +987,31 @@ T["ready lines"]["keep the last screen height while the terminal is hidden"] = f
   eq(child.lua_get("s:is_visible()"), false)
   eq(child.lua_get("s:is_ready()"), true)
   eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["ready lines"]["start at the screen's top, not in the scrollback, above blank rows"] = function()
+  child.o.lines = 120
+  -- 200 lines scroll into the scrollback, then the screen is cleared and TOP drawn at its
+  -- top with 60 more lines below it, and blank rows under them.
+  tall_output(
+    {},
+    nil,
+    "i=1; while [ $i -le 200 ]; do echo old $i; i=$((i+1)); done; printf '\\033[2J\\033[H';"
+      .. " echo TOP; i=1; while [ $i -le 60 ]; do echo line $i; i=$((i+1)); done"
+  )
+  eq(child.lua_get("vim.api.nvim_buf_line_count(s.buf) > vim.api.nvim_win_get_height(s:window())"), true)
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 62 })
+end
+
+T["ready lines"]["leave out Neovim's autocmd window"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("s:is_ready()"), true)
+  child.lua("s:hide()")
+  eq(child.lua_get("vim.api.nvim_buf_call(s.buf, function() return s:is_ready() end)"), true)
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 82, 82, 82 })
 end
 
 T["ready lines"]["are READY_LINES for a terminal never shown"] = function()
