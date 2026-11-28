@@ -646,10 +646,9 @@ require("duet.terminal").ensure([{agent}] [, {opts}]) *duet.terminal.ensure()*
     session this call starts is shown. A session started hidden gets a
     terminal the size of the window |duet-config-terminal-layout| opens, so
     the agent draws its whole screen before you see it. As with
-    |:Duet-open|, an agent that
-    exited while you were not looking is not restarted: its terminal is
-    shown, so you can read its output, and an error is returned; the next
-    call restarts it.
+    |:Duet-open|, an agent that exited while you were not looking is not
+    restarted: its terminal is shown, so you can read its output, and an
+    error is returned; the next call restarts it.
 
                                                      *duet-session-when_ready*
 session:when_ready({timeout_ms}, {cb})

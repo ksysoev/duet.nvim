@@ -1109,6 +1109,34 @@ T["hidden start"]["keeps the job with 'nohidden'"] = function()
   )
 end
 
+T["hidden start"]["reports a missing binary and cleans up"] = function()
+  fake("fake", { "duet-no-such-binary" }, { "mcp.json" })
+  local wins = child.lua_get("#vim.api.nvim_list_wins()")
+  local result = child.lua("return { T.Session.new(require('duet.agents').get('fake'), { hidden = true }) }")
+  eq(result[1], vim.NIL)
+  eq(result[2]:match("^terminal: cannot start fake") ~= nil, true)
+  eq(child.lua_get("#T.list()"), 0)
+  eq(child.lua_get("run_entries()"), {})
+  eq(child.lua_get("#vim.api.nvim_list_wins()"), wins)
+end
+
+T["hidden start"]["falls back to the autocmd window when no float can be opened"] = function()
+  child.o.lines = 120
+  child.lua([[
+    local open = vim.api.nvim_open_win
+    vim.api.nvim_open_win = function(buf, enter, cfg)
+      if cfg.hide then
+        error("no float")
+      end
+      return open(buf, enter, cfg)
+    end
+  ]])
+  tall_output({ hidden = true })
+  eq(child.lua_get("{ s.rows == nil, running(s.job), s:is_visible() }"), { true, true, false })
+  eq(child.lua_get("s:is_ready()"), false)
+  eq(child.lua_get("_G.got"), { 50 })
+end
+
 T["hidden start"]["restart of a hidden session keeps the size"] = function()
   fake("fake", STTY)
   hidden_size()

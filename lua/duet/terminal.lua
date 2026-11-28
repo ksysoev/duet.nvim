@@ -19,7 +19,7 @@ local M = {}
 ---@field stopping boolean the job is being stopped by duet, so its exit is expected
 ---@field stopped boolean duet stopped the agent while it ran (stop, restart, wiping the buffer)
 ---@field seen_ready boolean the agent's TUI has been ready for input at least once
----@field rows integer|nil height of the tallest window last seen showing the terminal
+---@field rows integer|nil height of the tallest window last seen showing it, or of its hidden start float
 local Session = {}
 Session.__index = Session
 M.Session = Session
@@ -38,7 +38,7 @@ local FILETYPE = "duet_terminal"
 -- Readiness polling (Session:when_ready): how often, and how many lines the adapter's
 -- is_ready and read_input see at least. They see the terminal's screen down to its last
 -- non-blank row, or the last READY_LINES lines ending there if those reach higher (also for a
--- terminal no window has shown yet). The live input box is on the screen, however tall typed
+-- terminal started hidden where no float could be opened, see call_hidden()). The live input box is on the screen, however tall typed
 -- input makes it; reading no higher keeps old boxes in the scrollback, which could pass for
 -- ready while a dialog is open, out of view.
 local READY_POLL_MS = 50
@@ -1256,7 +1256,7 @@ function Session.new(agent, opts)
   if not started then
     if opened then
       pcall(vim.api.nvim_win_close, win, true)
-    elseif vim.api.nvim_win_is_valid(win) then
+    elseif win and vim.api.nvim_win_is_valid(win) then
       -- Put the previous buffer back, or an empty one if it is gone, so deleting ours
       -- below does not close a window we were lent.
       local keep = prev_buf and vim.api.nvim_buf_is_valid(prev_buf) and prev_buf or vim.api.nvim_create_buf(true, false)
