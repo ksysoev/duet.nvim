@@ -1004,6 +1004,30 @@ T["ready lines"]["start at the screen's top, not in the scrollback, above blank 
   eq(child.lua_get("_G.got"), { 62 })
 end
 
+T["ready lines"]["leave out a winbar"] = function()
+  child.o.lines = 120
+  child.o.winbar = "bar"
+  tall_output(
+    {},
+    nil,
+    "i=1; while [ $i -le 200 ]; do echo old $i; i=$((i+1)); done; printf '\\033[2J\\033[H';"
+      .. " echo TOP; i=1; while [ $i -le 60 ]; do echo line $i; i=$((i+1)); done"
+  )
+  eq(child.lua_get("s:is_ready()"), true)
+  eq(child.lua_get("_G.got"), { 62 })
+end
+
+T["ready lines"]["take the height the terminal had when it was hidden"] = function()
+  child.o.lines = 120
+  tall_output({})
+  eq(child.lua_get("s:is_ready()"), true)
+  -- Shrink the terminal's window to 30 rows and hide it, with no readiness check in between.
+  child.lua("local win = s:window(); vim.cmd('new'); vim.api.nvim_win_set_height(win, 30); vim.cmd('redraw')")
+  child.lua("s:hide()")
+  eq(child.lua_get("s:is_ready()"), false)
+  eq(child.lua_get("_G.got"), { 82, 50 })
+end
+
 T["ready lines"]["leave out Neovim's autocmd window"] = function()
   child.o.lines = 120
   tall_output({})

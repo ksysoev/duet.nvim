@@ -35,8 +35,8 @@ local augroup
 local enlarging = false
 
 local FILETYPE = "duet_terminal"
--- Readiness polling (Session:when_ready): how often, and the fewest of the terminal's last
--- non-blank lines the adapter's is_ready and read_input see. They see the terminal's screen,
+-- Readiness polling (Session:when_ready): how often, and the fewest of the terminal's lines,
+-- ending at the last non-blank one, that the adapter's is_ready and read_input see. They see the terminal's screen,
 -- or READY_LINES lines if that reaches higher: the live input box is on the screen, however
 -- tall typed input makes it, and reading no further keeps old boxes in the scrollback, which
 -- could pass for ready while a dialog is open, out of view.
@@ -999,6 +999,25 @@ local function attach_links(self)
   end
 end
 
+---The terminal's screen height: Neovim sizes a terminal to the tallest window showing it, in
+---any tab, and keeps that size while no window shows it, so the height last seen stands in
+---(also recorded when the terminal leaves a window). The height leaves out a window's winbar,
+---and Neovim's autocmd window (`nvim_buf_call` on a hidden buffer) doesn't count, as in Neovim.
+---@param self duet.Session
+---@return integer rows 0 if no window has shown the terminal
+local function screen_rows(self)
+  local rows = 0
+  for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
+    if vim.fn.win_gettype(win) ~= "autocmd" then
+      rows = math.max(rows, vim.fn.getwininfo(win)[1].height)
+    end
+  end
+  if rows > 0 then
+    self.rows = rows
+  end
+  return self.rows or 0
+end
+
 ---@param self duet.Session
 local function setup_buffer(self)
   local buf = self.buf
@@ -1025,6 +1044,14 @@ local function setup_buffer(self)
       if config().auto_insert and self.job then
         vim.cmd.startinsert()
       end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWinLeave", {
+    group = augroup,
+    buffer = buf,
+    desc = "duet: remember the terminal's height while it is hidden",
+    callback = function()
+      screen_rows(self)
     end,
   })
   -- BufUnload comes first for :bdelete, :bunload and :bwipeout, so the session is
@@ -1253,24 +1280,6 @@ local function last_lines(buf, n, rows)
     first = math.min(first, count - rows)
   end
   return vim.api.nvim_buf_get_lines(buf, math.max(0, first), last, false)
-end
-
----The terminal's screen height: Neovim sizes a terminal to the tallest window showing it, in
----any tab, and keeps that size while no window shows it, so the height last seen stands in.
----Neovim leaves out its autocmd window (`nvim_buf_call` on a hidden buffer), and so does this.
----@param self duet.Session
----@return integer rows 0 if no window has shown the terminal
-local function screen_rows(self)
-  local rows = 0
-  for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
-    if vim.fn.win_gettype(win) ~= "autocmd" then
-      rows = math.max(rows, vim.api.nvim_win_get_height(win))
-    end
-  end
-  if rows > 0 then
-    self.rows = rows
-  end
-  return self.rows or 0
 end
 
 ---The terminal's lines the adapter's is_ready and read_input see: its screen down to the
