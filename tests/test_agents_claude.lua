@@ -641,6 +641,11 @@ local ready_cases = {
     lines = { RULE, "❯\194\160first", "  ❯ ls" },
     ready = false,
   },
+  {
+    name = "a bordered choice indented by two spaces below a box cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  │ ❯ 1. Yes   │", "  │   2. No    │" },
+    ready = false,
+  },
   -- An old input box whose closing rule has newer content below it, with no `❯` after it.
   {
     name = "an old input box above a dialog without a choice marker",
