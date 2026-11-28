@@ -1068,7 +1068,8 @@ local function open_in_window(abs, jump, exclude)
     return win
   end
   if ok then
-    -- Quit at the swap file's ATTENTION prompt.
+    -- Quit chosen for the swap file's ATTENTION prompt by a SwapExists autocommand
+    -- (v:swapchoice). Typed at the prompt, it makes `:edit` fail with E325.
     edit_err = ":edit did not open it"
   end
   if not_shown then
@@ -1110,9 +1111,10 @@ local function open_in_window(abs, jump, exclude)
   -- A failure after `:edit` left the buffer (e.g. in BufReadCmd) is the file's: the
   -- window then shows a buffer for it, or its own empty one renamed, and another window
   -- would only show that. An interrupt (CTRL-C, or Abort at the swap file's ATTENTION
-  -- prompt) or Quit there is the user's answer, not to be asked again.
+  -- prompt), or any answer to that prompt (Quit fails with E325), is the user's, not to
+  -- be asked again.
   local in_code = undo.created == nil and undo.replaced == nil
-  if ok or not (in_code and kept) or tostring(edit_err):find("Keyboard interrupt", 1, true) then
+  if ok or swapped or not (in_code and kept) or tostring(edit_err):find("Keyboard interrupt", 1, true) then
     return nil, edit_err
   end
   return nil, edit_err, win

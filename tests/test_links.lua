@@ -982,7 +982,8 @@ T["terminal"]["a code window where :edit fails"]["keeps a buffer an autocmd made
 end
 
 ---Leave a swap file for a.lua, as another Neovim would, and answer its ATTENTION prompt
----with `choice` ("a" Abort, "q" Quit), counting the prompts in `_G.prompts`.
+---with `choice` ("a" Abort, "q" Quit; "" shows the prompt), counting the prompts in
+---`_G.prompts`.
 ---@param choice string
 local function swap_file(choice)
   child.lua(
@@ -1031,6 +1032,26 @@ T["terminal"]["a code window where :edit fails"]["is not left after Abort at the
   eq(child.lua_get("vim.tbl_map(function(n) return n.msg end, " .. reported .. ")"), {
     "[duet] links: cannot open 'a.lua': Keyboard interrupt",
   })
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { code })), "b.lua")
+end
+
+T["terminal"]["a code window where :edit fails"]["is not left after q typed at the swap file prompt"] = function()
+  -- The prompt itself, which needs a UI: Quit typed at it makes `:edit` fail with E325,
+  -- and the window keeps its buffer.
+  swap_file("")
+  local code = show_code("b.lua")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.api.nvim_ui_attach(200, 50, {})
+  MiniTest.finally(function()
+    child.api.nvim_ui_detach()
+  end)
+  child.type_keys("gf")
+  eq(child.api.nvim_get_mode().mode, "r?")
+  child.type_keys("q")
+  eq(child.lua_get("_G.prompts"), 1)
+  eq(#child.lua_get(REPORTED), 1)
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
   eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { code })), "b.lua")
 end
