@@ -513,6 +513,43 @@ local ready_cases = {
     ready = false,
   },
   {
+    name = "an old box with a ❯ on a later line above a dialog without a choice marker",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above a dialog's text without a rule",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above newer output",
+    lines = {
+      RULE,
+      "❯ first",
+      "  a ❯ b",
+      RULE,
+      "⏺ Bash(x)",
+      RULE,
+      " Do you want to proceed?",
+      " Yes / No",
+    },
+    ready = false,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line and a notice below the footer",
+    lines = {
+      RULE,
+      "❯\194\160first",
+      "  a ❯ b",
+      RULE,
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      string.rep(" ", 70) .. "ctrl+y to paste deleted text",
+      "",
+    },
+    ready = true,
+  },
+  {
     name = "a box with a ❯ on a later line, cut off at the bottom",
     lines = { RULE, "❯\194\160first", "  a ❯ b" },
     ready = false,

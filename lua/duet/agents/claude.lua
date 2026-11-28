@@ -235,16 +235,33 @@ local function menu_prompt(lines, i)
   return nil
 end
 
----If line `i` is part of an input box (its prompt line or a later line of a multi-line
----input, above the box's closing rule), the box's prompt line. The text in a box is the
----user's, so a `❯` there, such as a pasted shell prompt, marks no choice. A box cut off at
----the bottom has no closing rule and doesn't count: its lines can't be told from a dialog.
+---Whether `line` can be a row below the live input box: the footer (`  ⏵⏵ …`,
+---`  ? for shortcuts`), a notice, the slash-command menu, or a blank line. All are indented
+---by at least two spaces. A dialog's text is indented by one space, and newer output starts
+---in the first column (`⏺ …`, a rule).
+---@param line string
+---@return boolean
+local function is_footer_row(line)
+  return line:match("^%s*$") ~= nil or line:match("^  ") ~= nil
+end
+
+---If line `i` is part of the input box at the bottom of the screen (its prompt line or a
+---later line of a multi-line input, above the box's closing rule, with only footer rows
+---below that rule), the box's prompt line. The text in that box is the user's, so a `❯`
+---there, such as a pasted shell prompt, marks no choice. An older box left above a dialog
+---or newer output doesn't count, nor does a box cut off at the bottom: it has no closing
+---rule, and its lines can't be told from a dialog's.
 ---@param lines string[]
 ---@param i integer
 ---@return integer|nil
 local function enclosing_prompt(lines, i)
   for j = i + 1, #lines do
     if is_rule(lines[j]) then
+      for k = j + 1, #lines do
+        if not is_footer_row(lines[k]) then
+          return nil
+        end
+      end
       return box_prompt(lines, j)
     end
   end
@@ -270,7 +287,7 @@ end
 ---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
 ---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
 ---screen counts: an older frame left in the scrollback above a dialog doesn't. The
----slash-command menu's `❯` doesn't count (see last_marker). The last such prompt line
+---`❯` in the input box's text and the slash-command menu's `❯` don't count (see last_marker). The last such prompt line
 ---counts: in shell mode the live box starts with `!`, so an older box can sit between
 ---the last `❯` and it. nil if there is none.
 ---@param lines string[]
