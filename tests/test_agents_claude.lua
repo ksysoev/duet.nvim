@@ -983,6 +983,11 @@ local ready_cases = {
     ready = false,
   },
   {
+    name = "a ↑ rule over a choice indented by two spaces",
+    lines = { UP80, "  ❯ 1. Yes", "    2. No", W80 },
+    ready = false,
+  },
+  {
     name = "a ↑ rule over a dialog choice, cut off at the bottom",
     lines = { UP80, " ❯ 1. Yes", "   2. No" },
     ready = false,

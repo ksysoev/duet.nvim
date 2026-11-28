@@ -264,11 +264,12 @@ local function only_footer_below(lines, prompt, close)
 end
 
 ---The live input box at the bottom of the screen: the index of its first row (its prompt
----line, see is_prompt) and of its closing rule. The box is found from the bottom: its closing rule
----is the last rule on screen, with only footer rows below it (see only_footer_below), and
----its top rule is the nearest rule above with the same width, with the prompt line right
----below it. The lines between are the user's input, so a `❯` there (a pasted shell
----prompt) or a narrower rule (pasted box-drawing text or Claude Code output) is just text.
+---line, see is_prompt) and of its closing rule. The box is found from the bottom: its
+---closing rule is the last rule on screen, with only footer rows below it (see
+---only_footer_below), and its top rule is the nearest rule above with the same width,
+---with the prompt line right below it. The lines between are the user's input, so a `❯`
+---there (a pasted shell prompt) or a narrower rule (pasted box-drawing text or Claude Code
+---output) is just text.
 ---An older box left above a dialog or newer output doesn't count: the dialog's rule or the
 ---output comes below its closing rule. Dialogs (folder trust, permission prompts) replace
 ---the input box, so a rule closing a dialog has no prompt line below its top rule.
@@ -331,7 +332,8 @@ local function live_box(lines)
       end
       local starts
       if top_label == "up" then
-        starts = is_continuation(lines[first])
+        -- A dialog's choice can't be told from a row of the input that starts with a `❯`.
+        starts = is_continuation(lines[first]) and not starts_with_marker(lines[first])
       else
         starts = is_prompt(lines[first])
       end
