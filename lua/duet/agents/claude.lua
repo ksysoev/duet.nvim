@@ -305,8 +305,8 @@ end
 ---the box's closing rule (see is_footer_row): a dialog that marks no choice with `❯`, such
 ---as `Press Enter to continue`, or newer output can sit below an older box. A box cut off
 ---at the bottom, with no closing rule, counts only if its later lines pass the same check
----(blank, or indented by two spaces like the rest of a multi-line input). nil if there is
----none.
+---(see is_footer_row: the rest of a multi-line input is indented by two spaces). nil if
+---there is none.
 ---@param lines string[]
 ---@return integer|nil
 local function live_prompt(lines)
