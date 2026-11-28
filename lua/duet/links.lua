@@ -828,13 +828,13 @@ local function replaceable_window()
   return best
 end
 
----Whether `win` shows the file `abs`, under this name or another one for the same file
+---Whether `buf` is for the file `abs`, under this name or another one for the same file
 ---(a symlink, or `/var` for `/private/var` on macOS).
----@param win integer
+---@param buf integer
 ---@param abs string normalized absolute path
 ---@return boolean
-local function shows(win, abs)
-  local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+local function names_file(buf, abs)
+  local name = vim.api.nvim_buf_get_name(buf)
   if name == "" then
     return false
   end
@@ -843,6 +843,14 @@ local function shows(win, abs)
   end
   local real = vim.uv.fs_realpath(name)
   return real ~= nil and real == vim.uv.fs_realpath(abs)
+end
+
+---Whether `win` shows the file `abs` (see names_file()).
+---@param win integer
+---@param abs string normalized absolute path
+---@return boolean
+local function shows(win, abs)
+  return names_file(vim.api.nvim_win_get_buf(win), abs)
 end
 
 ---Whether `:edit` may leave the buffer `win` shows, by the rules Neovim's `:edit` uses
@@ -965,14 +973,16 @@ local function restore_layout(undo)
 end
 
 ---Open `abs` in the window target_window() picks, which is then current. When `:edit`
----fails, the layout is put back as it was.
+---fails, the layout is put back as it was, and so is a code window's alternate file
+---when another window may do.
 ---@param abs string normalized absolute path
 ---@param jump boolean add a jump even when the window already shows the file
 ---@param exclude? integer a code window not to use (see target_window())
 ---@return integer|nil win
 ---@return string|nil err
 ---@return integer|nil left_out the code window `:edit` failed in without leaving its
----buffer (e.g. 'autowriteall' could not write it), where another window may do
+---buffer (e.g. 'autowriteall' could not write it), where another window may do; not
+---for an interrupt
 local function open_in_window(abs, jump, exclude)
   local win, undo, hide_err = target_window(abs, exclude)
   if not win then
@@ -991,6 +1001,7 @@ local function open_in_window(abs, jump, exclude)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     bufs[b] = true
   end
+  local alt = vim.fn.bufnr("#")
   vim.cmd("normal! m'")
   local ok, edit_err = pcall(vim.cmd.edit, vim.fn.fnameescape(abs))
   if ok then
@@ -999,20 +1010,39 @@ local function open_in_window(abs, jump, exclude)
   restore_layout(undo)
   -- A failure after `:edit` left the buffer (e.g. in BufReadCmd) is the file's: the
   -- window then shows a buffer for it, or its own empty one renamed, and another window
-  -- would only show that.
+  -- would only show that. An interrupt (CTRL-C, or Abort at the swap file's ATTENTION
+  -- prompt) is the user's answer, not to be asked again.
   local in_code = undo.created == nil and undo.replaced == nil
   local kept = vim.api.nvim_win_is_valid(win)
     and vim.api.nvim_win_get_buf(win) == buf
     and vim.api.nvim_buf_get_name(buf) == name
-  if not (in_code and kept) then
+  if not (in_code and kept) or tostring(edit_err):find("Keyboard interrupt", 1, true) then
     return nil, edit_err
   end
   -- `:edit` may have made an unlisted buffer for the file before it failed: it goes, so
   -- the next attempt, and what it leaves when it fails, is as this one would have been.
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if not bufs[b] and not vim.bo[b].buflisted and not vim.bo[b].modified and #vim.fn.win_findbuf(b) == 0 then
+    if
+      not bufs[b]
+      and names_file(b, abs)
+      and not vim.bo[b].buflisted
+      and not vim.bo[b].modified
+      and #vim.fn.win_findbuf(b) == 0
+    then
       pcall(vim.api.nvim_buf_delete, b, { force = true })
     end
+  end
+  -- The window's alternate file is put back too: the file was never shown there.
+  local alt_name = alt > 0 and vim.api.nvim_buf_is_valid(alt) and vim.api.nvim_buf_get_name(alt) or ""
+  if alt_name ~= "" then
+    -- `:balt` lists the buffer, as `:badd` does: it stays as it was.
+    local listed = vim.bo[alt].buflisted
+    vim.api.nvim_win_call(win, function()
+      if vim.fn.bufnr("#") ~= alt then
+        pcall(vim.cmd.balt, vim.fn.fnameescape(alt_name))
+      end
+    end)
+    vim.bo[alt].buflisted = listed
   end
   return nil, edit_err, win
 end
@@ -1028,7 +1058,8 @@ end
 ---Open a link in a code window (see |duet-links| for which one), put the cursor on its
 ---line and column, center the view and briefly highlight the line or range. The window
 ---is focused. When `:edit` fails in a code window without leaving its buffer, the file is
----opened once more in the next window that would do, with that one left out.
+---opened once more in the next window that would do, with that one left out (not after an
+---interrupt, e.g. Abort at the swap file's ATTENTION prompt).
 ---@param link duet.Link|{ path: string, line?: integer, end_line?: integer, col?: integer, abs?: string }
 ---@param opts? { cwd?: string } where a relative, unresolved path is resolved from
 ---@return boolean|nil ok
@@ -1046,6 +1077,11 @@ function M.open(link, opts)
   if not win and left_out then
     -- Once, in the next window that would do: the error is this attempt's.
     win, open_err = open_in_window(abs, link.line ~= nil, left_out)
+    if win then
+      -- The layout put back in between went through the terminal, where `auto_insert`
+      -- started Insert mode: the file opens in Normal mode, as after one attempt.
+      vim.cmd.stopinsert()
+    end
   end
   if not win then
     return nil, ("links: cannot open '%s': %s"):format(link.path, open_err)
