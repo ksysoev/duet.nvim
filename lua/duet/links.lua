@@ -1002,6 +1002,7 @@ local function open_in_window(abs, jump, exclude)
     bufs[b] = true
   end
   local alt = vim.fn.bufnr("#")
+  local context = vim.fn.getpos("''")
   vim.cmd("normal! m'")
   local ok, edit_err = pcall(vim.cmd.edit, vim.fn.fnameescape(abs))
   if ok then
@@ -1032,14 +1033,18 @@ local function open_in_window(abs, jump, exclude)
       pcall(vim.api.nvim_buf_delete, b, { force = true })
     end
   end
-  -- The window's alternate file is put back too: the file was never shown there.
+  -- The window's previous context mark and alternate file are put back too: the file
+  -- was never shown there.
+  vim.api.nvim_win_call(win, function()
+    vim.fn.setpos("''", context)
+  end)
   local alt_name = alt > 0 and vim.api.nvim_buf_is_valid(alt) and vim.api.nvim_buf_get_name(alt) or ""
   if alt_name ~= "" then
-    -- `:balt` lists the buffer, as `:badd` does: it stays as it was.
+    -- `:balt` lists the buffer, as `:badd` does: it stays as it was, with no BufAdd.
     local listed = vim.bo[alt].buflisted
     vim.api.nvim_win_call(win, function()
       if vim.fn.bufnr("#") ~= alt then
-        pcall(vim.cmd.balt, vim.fn.fnameescape(alt_name))
+        pcall(vim.cmd, "noautocmd balt " .. vim.fn.fnameescape(alt_name))
       end
     end)
     vim.bo[alt].buflisted = listed

@@ -858,10 +858,10 @@ is in no other window, and neither 'bufhidden' set to "hide", 'hidden' (when
 'bufhidden' is empty) nor 'autowriteall' lets it go. With 'confirm', the
 window is skipped rather than asking to save. If |:edit| still fails in the
 chosen window before leaving its buffer ('autowriteall' can't write it, or an
-autocommand aborts the edit), the file opens in the next such window, else in
-a start screen or a split as below; the error is reported only when that fails
-too. An interrupt (CTRL-C, or Abort at the swap file's |ATTENTION| prompt) is
-reported at once.
+autocommand aborts the edit), it is tried once more without that window: in
+the next such window, else in a start screen or a split as below. The error is
+reported only when that fails too. An interrupt (CTRL-C, or Abort at the swap
+file's |ATTENTION| prompt) is reported at once.
 (|duet-context|'s `{file}` still refers to a skipped window.) A floating
 terminal is hidden first, so the file isn't behind it. With no such window,
 the file replaces a start screen, as |:edit| would: a window whose filetype is

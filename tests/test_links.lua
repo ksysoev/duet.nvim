@@ -908,6 +908,8 @@ T["terminal"]["a code window where :edit fails"]["is left for a split"]["with %s
     end
   end
   local code = child.lua_get("vim.api.nvim_get_current_win()")
+  -- Its previous context mark, away from the cursor, which the failed attempt must keep.
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 3 }); vim.fn.setpos(\"''\", { 0, 1, 1, 0 })")
   local buf = child.lua_get("vim.api.nvim_get_current_buf()")
   agent("printf 'a.lua:1\\n'")
   child.lua("cursor_on('a.lua')")
@@ -924,6 +926,8 @@ T["terminal"]["a code window where :edit fails"]["is left for a split"]["with %s
   eq(written(), false)
   local alt = "vim.api.nvim_win_call(..., function() return vim.api.nvim_buf_get_name(vim.fn.bufnr('#')) end)"
   eq(rel(child.lua_get(alt, { code })), "c.lua")
+  local mark = "vim.api.nvim_win_call(..., function() return vim.fn.getpos(\"''\") end)"
+  eq(child.lua_get(mark, { code }), { 0, 1, 1, 0 })
 end
 
 T["terminal"]["a code window where :edit fails"]["is left in Normal mode with auto_insert"] = function()
