@@ -606,6 +606,47 @@ local ready_cases = {
     lines = { RULE, "❯\194\160first", "  a ❯ b" },
     ready = false,
   },
+  -- An old input box whose closing rule has newer content below it, with no `❯` after it.
+  {
+    name = "an old input box above a dialog without a choice marker",
+    lines = { RULE, "❯ old", RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old input box above a dialog's text without a rule",
+    lines = { RULE, "❯ old", RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old input box above an indented result",
+    lines = { RULE, "❯ first", RULE, "  ⎿  Interrupted · What should Claude do instead?" },
+    ready = false,
+  },
+  {
+    name = "an old input box above newer output in the first column",
+    lines = { RULE, "❯ first", RULE, "⏺ Done." },
+    ready = false,
+  },
+  {
+    name = "an old input box above a spinner",
+    lines = { RULE, "❯ first", RULE, "", "✻ Thinking…" },
+    ready = false,
+  },
+  {
+    name = "an old shell prompt above a dialog without a choice marker",
+    lines = { RULE, "! ls", RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old input box above newer output and a dialog without a choice marker",
+    lines = { RULE, "❯ old", RULE, "⏺ Bash(x)", RULE, " Do you want to proceed?", " Yes / No" },
+    ready = false,
+  },
+  {
+    name = "an old input box above a dialog without a choice marker, then a blank line",
+    lines = { RULE, "❯ old", RULE, RULE, " Press Enter to continue", "" },
+    ready = false,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({
@@ -693,6 +734,11 @@ local input_cases = {
       " ❯ 1. Yes",
       "   2. No",
     },
+    input = vim.NIL,
+  },
+  {
+    name = "an old box above a dialog without a choice marker",
+    lines = { R80, "❯ old", R80, R80, " Press Enter to continue" },
     input = vim.NIL,
   },
 }
