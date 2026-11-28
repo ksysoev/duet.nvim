@@ -200,6 +200,45 @@ byte-compatible with revdiff (`format.parse` round-trips it), so check revdiff's
 - Every acceptance criterion in an issue maps to a test, or, for manual E2E criteria, a note in the PR describing what
   you ran.
 
+### Manual E2E with tmux
+
+The test suite uses a fake agent. For changes to the terminal, sending, links, mouse clicks or the adapter's screen
+heuristics, also run duet against the **real agent CLI** in tmux, where a real TUI draws the screen. Field runs have
+found bugs that unit tests and reviews missed.
+
+- **Setup**: a scratch git repo outside this one (in a temp dir), and an init file that loads this checkout:
+
+  ```lua
+  vim.opt.rtp:prepend("/path/to/duet.nvim")
+  vim.env.DUET_LOG_LEVEL = "debug"
+  require("duet").setup({})
+  ```
+
+- **Start**: `tmux new-session -d -s duet-e2e -x 200 -y 50 -c <repo> "nvim -n -u <init> --listen <sock>"`. Use `-n`
+  and no file argument: the ATTENTION prompt for a swap file left by your own Neovim blocks remote calls. For mouse
+  tests, `tmux set -t duet-e2e mouse on` (never `-g`). Open the agent with `nvim --server <sock> --remote-send
+  ':Duet<CR>'`.
+- **Drive it over `--listen`**: put Lua in script files and run them with `nvim --server <sock> --remote-expr
+  "luaeval('dofile(\"<file>\")(_A)', '<arg>')"`. Inline Lua with quotes breaks the shell quoting, and `luaeval()` passes
+  its argument as `_A`, not `...`. Write to the agent with `vim.fn.chansend(session.job, …)`. A remote call that hangs
+  usually means a hit-enter prompt: look with `tmux capture-pane -p`, then `tmux send-keys Enter`.
+- **Read the terminal buffer**, not the pane: `nvim_buf_get_lines(session.buf, …)` over `--listen`. tmux shows Claude
+  Code's NBSP (U+00A0, e.g. after `❯` or `⎿`) as a plain space. Match text around it with separate `find`s.
+- **Claude Code**: a new scratch repo shows the folder-trust dialog; accept with `\27[B` then `\r`. Print a file
+  reference without a model call with bash mode: `!`, then `echo a.lua:2`, then `\r`. `\27[Z` (shift+tab) cycles the
+  permission modes.
+- **Keys and the mouse**: type keys with `tmux send-keys -t duet-e2e g f`. Inject a click as raw SGR bytes with `tmux
+  send-keys -H <hex>`: `\e[<0;<col>;<row>M` presses the left button and `…m` releases it; add 16 for CTRL. Take the
+  position from `vim.fn.screenpos()` (1-based). Don't use `send-keys -l` or `paste-buffer`: `paste-buffer` turns ESC
+  into a literal `^[`. To see what Neovim read, record `vim.fn.keytrans(typed)` in a `vim.on_key()` callback.
+- **Compare with `main`** in the same session, so the difference is the change: load the old module with
+  `package.loaded["duet.links"] = dofile(<copy of git show main:…>)`, or delete the mapping the change adds.
+- **Logs**: grep `stdpath("log")/duet.log` (with `DUET_LOG_LEVEL=debug`) for timeouts and errors. Messages shown with
+  `notify` are in `--remote-expr 'execute("messages")'`.
+- **Clean up** with `tmux kill-session -t duet-e2e`.
+- **In the PR**, describe the run under "Manual E2E": the agent CLI version, the steps, what you saw, and what `main`
+  did with the same steps.
+
 ## Working on an issue
 
 1. Read #1, this file, and the issue. Check that the dependencies listed in the issue are merged.
