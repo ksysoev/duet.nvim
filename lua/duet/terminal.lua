@@ -220,7 +220,7 @@ end
 ---@field columns integer editor width
 ---@field lines integer rows available for windows
 ---@field top? integer rows taken above them (the tabline)
----@field winbar? boolean windows have a winbar (the global 'winbar'), which takes a row of a split
+---@field winbar? boolean a new split has a winbar (it copies the current window's 'winbar')
 
 ---Window config for a layout. Pure: depends only on its arguments.
 ---@param layout "float"|"right"|"left"|"bottom"
@@ -1028,10 +1028,11 @@ end
 
 ---The terminal's screen height: Neovim sizes a terminal to the tallest window showing it, in
 ---any tab, and keeps that size while no window shows it, so the height last seen stands in
----(also recorded when the terminal leaves a window). The height leaves out a window's winbar,
----and Neovim's autocmd window (`nvim_buf_call` on a hidden buffer) doesn't count, as in Neovim.
+---(also recorded when the terminal leaves a window), or the hidden float's for a terminal started
+---hidden (see call_hidden()). The height leaves out a window's winbar, and Neovim's autocmd
+---window (`nvim_buf_call` on a hidden buffer) doesn't count, as in Neovim.
 ---@param self duet.Session
----@return integer rows 0 if no window has shown the terminal
+---@return integer rows 0 if no window has shown the terminal and it started in the autocmd window
 local function screen_rows(self)
   local rows = 0
   for _, win in ipairs(vim.fn.win_findbuf(self.buf)) do
