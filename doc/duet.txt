@@ -219,8 +219,9 @@ terminal ~
         - `"open_link_mouse"`: open the file link clicked (terminal and
           normal mode). Bind it to a mouse key such as `<C-LeftMouse>`:
           it reads where the mouse is, and a key such as `gf` would no
-          longer reach the agent in terminal mode. See
-          |duet-links-mouse|.
+          longer reach the agent in terminal mode. Its double, triple and
+          quadruple clicks (`<2-C-LeftMouse>`, …) are mapped too, unless
+          you name them here. See |duet-links-mouse|.
         - `"next_link"`, `"prev_link"`: move to the next or previous file
           link in the visible output; a count repeats it (normal mode).
           The defaults `]l` and `[l` replace Neovim's |]l| and |[l| in the
@@ -880,10 +881,18 @@ CTRL-click on text in the terminal that is not a link, or names a file that
 does not exist, does nothing: until the button is let go, duet also keeps
 the click's drag and release (`<C-LeftDrag>`, `<C-LeftRelease>`, and
 `<LeftDrag>`, `<LeftRelease>` for when CTRL is let go first), except keys you
-map in |duet-config-terminal-keys|. A double or triple click on the
-terminal's text acts once: duet keeps its next presses (`<2-C-LeftMouse>`,
-…) with their drags and releases, so they don't reach the agent, unless
-you map them.
+map in |duet-config-terminal-keys|.
+
+Neovim counts clicks at the same place whatever the modifiers: a CTRL-click
+right after a plain click there (within 'mousetime'), such as one that
+focused the terminal, is `<2-C-LeftMouse>`. duet maps the double, triple and
+quadruple clicks of the key too, so that CTRL-click opens the link as well.
+As for the key itself, your global mapping of them runs only off the
+terminal's text. Name one in |duet-config-terminal-keys| to map it yourself,
+or `false` to leave it unmapped. A double or triple CTRL-click on the
+terminal's text acts once: duet keeps its next presses with their drags and
+releases, so they don't reach the agent. A press you map yourself runs your
+mapping instead, and ends the click.
 
 Anywhere else, such as another window or a status line, the click does what
 it does without duet: your own global mapping of the key (for example
@@ -917,9 +926,6 @@ Known quirks:
   uses the mouse, so `<S-LeftMouse>` rarely reaches Neovim.
 - In tmux, clicks reach Neovim only with `set -g mouse on`; tmux passes the
   modifiers on.
-- Neovim counts clicks at the same place whatever the modifiers: a CTRL-click
-  right after a plain click there (within 'mousetime') is `<2-C-LeftMouse>`,
-  a different key. Map it too if you click to focus first.
 
 OSC 8 hyperlinks ~
 Programs can print a link whose target differs from its text, as OSC 8

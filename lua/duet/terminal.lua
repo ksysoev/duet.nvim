@@ -915,8 +915,9 @@ local function on_exit(self, code)
 end
 
 -- Key actions on links (see duet.links), with their descriptions and modes (default:
--- Normal mode).
----@type table<string, { desc: string, fn: fun(lhs: string), modes?: string[] }>
+-- Normal mode). `variants` gives more keys mapped to the action along with `lhs`, unless
+-- `terminal.keys` names them itself.
+---@type table<string, { desc: string, fn: fun(lhs: string), modes?: string[], variants?: fun(lhs: string): string[] }>
 local LINK_ACTIONS = {
   open_link = {
     desc = "duet: open the file link under the cursor",
@@ -935,6 +936,10 @@ local LINK_ACTIONS = {
     fn = function(lhs)
       require("duet.links").click(lhs)
     end,
+    -- A CTRL-click right after a plain click at the same place is `<2-C-LeftMouse>`.
+    variants = function(lhs)
+      return require("duet.links").counted_clicks(lhs)
+    end,
   },
   next_link = {
     desc = "duet: next file link",
@@ -952,7 +957,12 @@ local LINK_ACTIONS = {
 
 ---@param self duet.Session
 local function set_keymaps(self)
-  for lhs, action in pairs(config().keys) do
+  local keys = config().keys
+  local named = {} -- keys in terminal.keys, even turned off: variants don't replace them
+  for lhs in pairs(keys) do
+    named[vim.keycode(lhs)] = true
+  end
+  for lhs, action in pairs(keys) do
     if action == "normal_mode" then
       vim.keymap.set("t", lhs, [[<C-\><C-n>]], { buffer = self.buf, desc = "duet: leave terminal mode" })
     elseif action == "hide" then
@@ -961,9 +971,17 @@ local function set_keymaps(self)
       end, { buffer = self.buf, desc = "duet: hide the agent terminal" })
     elseif LINK_ACTIONS[action] then
       local spec = LINK_ACTIONS[action]
-      vim.keymap.set(spec.modes or "n", lhs, function()
-        spec.fn(lhs)
-      end, { buffer = self.buf, desc = spec.desc })
+      local all = { lhs }
+      for _, variant in ipairs(spec.variants and spec.variants(lhs) or {}) do
+        if not named[vim.keycode(variant)] then
+          all[#all + 1] = variant
+        end
+      end
+      for _, key in ipairs(all) do
+        vim.keymap.set(spec.modes or "n", key, function()
+          spec.fn(key)
+        end, { buffer = self.buf, desc = spec.desc })
+      end
     end
   end
 end
