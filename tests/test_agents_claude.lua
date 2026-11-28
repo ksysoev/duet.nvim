@@ -745,6 +745,44 @@ local ready_cases = {
     lines = { RULE, "❯\194\160", RULE, "  ⏸ manual mode on", string.rep(" ", 70) .. "ctrl+y to paste deleted text" },
     ready = true,
   },
+  -- A `❯` after other text in a footer row is not a dialog's choice (#73).
+  {
+    name = "the live box with a status line holding a ❯",
+    lines = { RULE, "❯ ", RULE, "  ~/dev ❯ main" },
+    ready = true,
+  },
+  {
+    name = "the live box with a status line holding several ❯ and the mode footer",
+    lines = {
+      RULE,
+      "❯\194\160",
+      RULE,
+      "  ~/dev/duet ❯ main ❯ Opus",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    },
+    ready = true,
+  },
+  {
+    name = "a slash command with its menu open and a status line holding a ❯",
+    lines = { RULE, "❯\194\160/clear", RULE, "  ~/dev ❯ main", "  ❯ /clear   Start a new session" },
+    ready = true,
+  },
+  -- A status line that starts with a `❯` can't be told from a dialog's choice.
+  {
+    name = "a status line starting with a ❯",
+    lines = { RULE, "❯\194\160", RULE, "  ❯ ~/dev main" },
+    ready = false,
+  },
+  {
+    name = "a bordered choice below an old input box",
+    lines = { RULE, "❯ ", RULE, "  │ ❯ 1. Yes │", "  │   2. No  │" },
+    ready = false,
+  },
+  {
+    name = "a choice with a no-break space after its ❯ below an old input box",
+    lines = { RULE, "❯ ", RULE, "  ❯\194\160 1. Yes", "    2. No" },
+    ready = false,
+  },
   -- An input box is found from the bottom: lines of "─" inside it are the user's text.
   {
     name = "a multi-line input with a line of ─ in it",
@@ -881,6 +919,11 @@ local input_cases = {
     name = "a multi-line input with a ❯ on a later line",
     lines = { R80, "❯" .. NBSP .. "ls output:", "  prompt ❯ here", R80, "  ⏵⏵ auto mode on" },
     input = "❯" .. NBSP .. "ls output:\n  prompt ❯ here",
+  },
+  {
+    name = "a status line holding a ❯",
+    lines = { R80, "❯" .. NBSP .. "fix it", R80, "  ~/dev ❯ main", "  ⏵⏵ auto mode on" },
+    input = "❯" .. NBSP .. "fix it",
   },
   { name = "no input box", lines = vim.list_slice(READY, 1, 3), input = vim.NIL },
   {

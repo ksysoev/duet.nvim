@@ -208,9 +208,11 @@ local function holds_command(line)
 end
 
 ---Whether only footer rows (see is_footer_row) follow the closing rule at `close` of the
----input box whose prompt line is `prompt`. A `❯` in those rows marks a dialog's choice,
----unless it is the selected entry of the slash-command menu (`  ❯ /clear   Start a new
----session…`, indented by two spaces) below a box that holds a slash command.
+---input box whose prompt line is `prompt`. A row that starts with a `❯` (see
+---starts_with_marker) marks a dialog's choice, unless it is the selected entry of the
+---slash-command menu (`  ❯ /clear   Start a new session…`, indented by two spaces) below a
+---box that holds a slash command. A `❯` after other text, such as a starship-style status
+---line (`  ~/dev ❯ main`), is not a choice.
 ---@param lines string[]
 ---@param prompt string the box's prompt line
 ---@param close integer
@@ -220,7 +222,7 @@ local function only_footer_below(lines, prompt, close)
     local line = lines[k]
     if not is_footer_row(line) then
       return false
-    elseif line:find("❯", 1, true) and not (line:match("^  ❯ /%S") and holds_command(prompt)) then
+    elseif starts_with_marker(line) and not (line:match("^  ❯ /%S") and holds_command(prompt)) then
       return false
     end
   end
