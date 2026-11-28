@@ -845,8 +845,9 @@ local function shows(win, abs)
   return real ~= nil and real == vim.uv.fs_realpath(abs)
 end
 
----Whether `:edit` may leave the buffer `win` shows, by the rules of Neovim's
----can_abandon() (without `:hide` or `:confirm`, which open() doesn't use): it is not
+---Whether `:edit` may leave the buffer `win` shows, by the rules Neovim's `:edit` uses
+---(buf_hide() in do_exedit(), then check_changed() in do_ecmd(), which autowrites only
+---for 'autowriteall'; open() uses no `:hide` or `:confirm`): it is not
 ---modified, it is shown in another window too, or 'bufhidden' (else 'hidden') lets it
 ---be hidden, or 'autowriteall' can write it. Otherwise `:edit` fails with E37 (or asks,
 ---with 'confirm'). For a code window only: Neovim never counts a buffer it can't write

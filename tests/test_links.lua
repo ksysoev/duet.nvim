@@ -730,9 +730,9 @@ T["terminal"]["a code window that sets 'winfixbuf'"]["is used when it shows the 
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
 end
 
----Show `file` (an unnamed buffer when nil) in the current window with 'nohidden', run
+---Show `file` (an unnamed buffer when false or nil) in the current window with 'nohidden', run
 ---`setup`, then change the buffer without saving. Returns the window.
----@param file? string
+---@param file? string|false
 ---@param setup? string Lua run before the change
 ---@return integer
 local function show_modified(file, setup)
@@ -748,8 +748,8 @@ end
 
 T["terminal"]["a code window whose buffer can't be left"] = MiniTest.new_set()
 
--- Each leaves `:edit` failing with E37 in the window, as a headless check against
--- Neovim's can_abandon() shows.
+-- Each leaves `:edit` failing with E37 in the window, as a headless check of Neovim's
+-- `:edit` shows.
 T["terminal"]["a code window whose buffer can't be left"]["is skipped for a split"] = MiniTest.new_set({
   parametrize = {
     { "'nohidden'", "b.lua", nil },
@@ -761,7 +761,8 @@ T["terminal"]["a code window whose buffer can't be left"]["is skipped for a spli
     { "'autowrite', which :edit ignores", "b.lua", "vim.o.autowrite = true" },
     { "'autowriteall' on a read-only buffer", "b.lua", "vim.o.autowriteall = true; vim.bo.readonly = true" },
     { "'autowriteall' with 'nowrite'", "b.lua", "vim.o.autowriteall = true; vim.o.write = false" },
-    { "'autowriteall' on an unnamed buffer", nil, "vim.o.autowriteall = true" },
+    -- `false`, not nil: mini.test drops the arguments after a nil.
+    { "'autowriteall' on an unnamed buffer", false, "vim.o.autowriteall = true" },
   },
 })
 
