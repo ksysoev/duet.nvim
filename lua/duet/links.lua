@@ -1012,20 +1012,21 @@ function M.follow(opts)
 end
 
 ---The drag and release keys that go with a press `lhs`, such as `<C-LeftDrag>` and
----`<C-LeftRelease>` for `<C-LeftMouse>`, and its button (`"Left"`). Nil for a key that is
+---`<C-LeftRelease>` for `<C-LeftMouse>`, its button (`"Left"`) and click count (`""`, or
+---`"2-"` for a double click, whose drag and release carry it too). Nil for a key that is
 ---not a mouse button press.
 ---@param lhs string
----@return { drag: string, release: string, button: string }|nil
+---@return { drag: string, release: string, button: string, count: string }|nil
 function M.click_keys(lhs)
   local mods, button = vim.fn.keytrans(vim.keycode(lhs)):match("^<(.-)(%u%l+)Mouse>$")
   if not mods then
     return nil
   end
-  mods = mods:gsub("%d%-", "") -- a double-click's drag and release have no count
   return {
     drag = ("<%s%sDrag>"):format(mods, button),
     release = ("<%s%sRelease>"):format(mods, button),
     button = button,
+    count = mods:match("%d%-") or "",
   }
 end
 
@@ -1054,7 +1055,7 @@ local function keep_rest(buf, lhs)
   if not keys then
     return
   end
-  local plain = assert(M.click_keys(("<%sMouse>"):format(keys.button)))
+  local plain = assert(M.click_keys(("<%s%sMouse>"):format(keys.count, keys.button)))
   local skip = {}
   for other, action in pairs(require("duet.config").get().terminal.keys) do
     if action then
@@ -1077,18 +1078,191 @@ local function keep_rest(buf, lhs)
   kept[buf] = mapped
 end
 
+---A mouse button key split up: `<C-2-LeftRelease>` is `{ mods = "C-", button = "Left",
+---kind = "Release", count = 2 }`. Nil for another key.
+---@param key string raw key code
+---@return { mods: string, button: string, kind: string, count: integer }|nil
+local function mouse_key(key)
+  local name = vim.fn.keytrans(key)
+  for _, kind in ipairs({ "Mouse", "Drag", "Release" }) do
+    local mods, button = name:match("^<(.-)(%u%l+)" .. kind .. ">$")
+    if mods then
+      return {
+        mods = (mods:gsub("%d%-", "")),
+        button = button,
+        kind = kind,
+        count = tonumber(mods:match("(%d)%-")) or 1,
+      }
+    end
+  end
+  return nil
+end
+
+local multiclick_ns = vim.api.nvim_create_namespace("duet.links.multiclick")
+
+---Keep the rest of a double or triple click whose first press click() handled: drop its
+---next presses (`<C-2-LeftMouse>`, …) and their drags and releases, with or without the
+---modifiers, unless a mapping takes them. Otherwise, where the terminal stays in Terminal
+---mode, the agent gets them. Another key typed, such as a new single click, ends it.
+---@param lhs string the press click() handled
+local function keep_multiclick(lhs)
+  local first = mouse_key(vim.keycode(lhs))
+  if not first or first.kind ~= "Mouse" then
+    return
+  end
+  local in_press = false -- between a press that was dropped and its release
+  local last, at = first.count, vim.uv.hrtime() -- the count of the last press, and when
+  local pos = vim.fn.getmousepos()
+  ---Whether press `k` goes on from the last one: Neovim counts up to 4, then from 1 again
+  ---for a press at the same place soon after, as for a new click anywhere.
+  local function next_press(k)
+    if k.count == last + 1 then
+      return true
+    end
+    local now = vim.fn.getmousepos()
+    return last == 4
+      and k.count == 1
+      and (vim.uv.hrtime() - at) / 1e6 <= vim.o.mousetime
+      and now.screenrow == pos.screenrow
+      and now.screencol == pos.screencol
+  end
+  vim.on_key(function(key, typed)
+    if typed == "" then
+      return nil -- not typed, e.g. keys a mapping or the code that opened the link fed
+    end
+    -- What was typed tells the click; `key` differs when a mapping took it, such as the
+    -- release keep_rest() mapped, and such keys are left alone.
+    local k = mouse_key(typed)
+    if k and k.button == first.button and k.kind ~= "Mouse" then
+      if key == typed and in_press and (k.mods == first.mods or k.mods == "") then
+        in_press = k.kind ~= "Release"
+        return ""
+      end
+      return nil -- the drag or release of the first press
+    end
+    if k and k.button == first.button and k.mods == first.mods and next_press(k) and key == typed then
+      in_press, last, at = true, k.count, vim.uv.hrtime()
+      return ""
+    end
+    vim.on_key(nil, multiclick_ns) -- another key, such as a new click
+    return nil
+  end, multiclick_ns)
+end
+
+---The global (not buffer-local) mapping of `lhs` in `mode`, as nvim_get_keymap() has
+---it. The terminal's buffer-local one is duet's own.
+---@param lhs string raw key codes
+---@param mode string
+---@return table|nil
+local function global_mapping(lhs, mode)
+  for _, map in ipairs(vim.api.nvim_get_keymap(mode)) do
+    if (map.lhsraw or vim.keycode(map.lhs)) == lhs then
+      return map
+    end
+  end
+  return nil
+end
+
+---The register given before the key in Normal mode, as `"x`, or "" for the default one.
+---@return string
+local function register_prefix()
+  local clipboard = vim.o.clipboard
+  local default = clipboard:find("unnamedplus") and "+" or clipboard:find("unnamed") and "*" or '"'
+  return vim.v.register ~= default and ('"' .. vim.v.register) or ""
+end
+
+local restore_ns = vim.api.nvim_create_namespace("duet.links.restore")
+-- The key a mapping with a Lua callback gives (K_SPECIAL, KS_EXTRA, KE_LUA).
+local K_LUA = "\128\253g"
+
+-- duet's own mapping that replay() swapped out for yours, until restore() puts it back.
+---@type { buf: integer, mode: string, map: table }|nil
+local swapped
+
+---Put back duet's mapping that replay() swapped out, if it still is.
+local function restore()
+  local swap = swapped
+  if not swap then
+    return
+  end
+  swapped = nil
+  vim.on_key(nil, restore_ns)
+  if vim.api.nvim_buf_is_valid(swap.buf) then
+    vim.api.nvim_buf_call(swap.buf, function()
+      vim.fn.mapset(swap.mode, false, swap.map)
+    end)
+  end
+end
+
+---Do with a click `lhs` that is not on a duet terminal's text what Neovim does without
+---duet's mapping: run your own global mapping of it, else the built-in action, after the
+---register and count typed before it. In Terminal mode with no Terminal-mode mapping,
+---Neovim leaves Terminal mode and reads the click again in Normal mode, where your
+---mapping, or duet's own, gets it.
+---
+---Your mapping runs as Neovim runs it, in its script and with its flags: for one key,
+---duet's buffer-local mapping is swapped for a copy of yours and the click is fed again.
+---duet's comes back with the first key your mapping gives, which |vim.on_key()| sees
+---once the mapping has been applied. No key is fed for that: a command of yours still
+---waiting for a key, such as `r`, would read it.
+---@param lhs string the key the action is mapped to
+local function replay(lhs)
+  restore()
+  local code = vim.keycode(lhs)
+  local terminal_mode = vim.api.nvim_get_mode().mode == "t"
+  local mode = terminal_mode and "t" or "n"
+  local map = global_mapping(code, mode)
+  if not map and terminal_mode and global_mapping(code, "n") then
+    vim.api.nvim_feedkeys(code, "mi", false)
+    vim.api.nvim_feedkeys(vim.keycode("<C-\\><C-N>"), "ni", false)
+    return
+  end
+  -- Fed ahead of the release or drag that may already be waiting: each feed with "i"
+  -- goes in front of the one before, so they are fed last key first.
+  local prefix = terminal_mode and "" or register_prefix() .. (vim.v.count > 0 and vim.v.count or "")
+  if not map then
+    vim.api.nvim_feedkeys(prefix .. code, "ni", false)
+    return
+  end
+  swapped = { buf = vim.api.nvim_get_current_buf(), mode = mode, map = vim.fn.maparg(lhs, mode, false, true) }
+  local copy = vim.deepcopy(map)
+  -- Used at once: a longer mapping of yours that starts with the click would wait for
+  -- more keys, and duet's mapping could be back by then.
+  copy.buffer, copy.nowait, copy.mode, copy.mode_bits = 1, 1, mode, nil
+  vim.fn.mapset(mode, false, copy)
+  vim.api.nvim_feedkeys(code, "mi", false)
+  if prefix ~= "" then
+    vim.api.nvim_feedkeys(prefix, "ni", false)
+  end
+  local before = #prefix -- keys read before the click: the register and count are ASCII
+  vim.on_key(function(key)
+    if before > 0 then
+      before = before - 1
+    elseif key == K_LUA then
+      -- Your Lua callback, still to run: removing its copy now would lose it.
+      vim.on_key(nil, restore_ns)
+    else
+      restore()
+    end
+  end, restore_ns)
+  -- A mapping that gives no key, such as <Nop>, or keys an error dropped: once the keys
+  -- fed are read.
+  vim.schedule(restore)
+end
+
 ---Open the link under the mouse (the `"open_link_mouse"` key action, mapped to a click
 ---in Terminal and Normal mode). A click on a duet terminal's text that is not a link does
----nothing. A click anywhere else, such as another window or a status line, gets Neovim's
----built-in action for `lhs`.
+---nothing. A click anywhere else, such as another window or a status line, does what it
+---does without duet: your own global mapping of `lhs`, else Neovim's built-in action. The
+---rest of a double or triple click on the text is kept, so it does not act there.
 ---@param lhs string the key the action is mapped to, e.g. `"<C-LeftMouse>"`
 function M.click(lhs)
   local link, win = M.at_mouse()
   if not win then
-    -- Ahead of the release or drag that may already be waiting.
-    vim.api.nvim_feedkeys(vim.keycode(lhs), "ni", false)
+    replay(lhs)
     return
   end
+  keep_multiclick(lhs)
   if not link then
     keep_rest(vim.api.nvim_get_current_buf(), lhs)
     return

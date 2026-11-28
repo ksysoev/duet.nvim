@@ -307,12 +307,13 @@ end
 
 T["click_keys()"] = MiniTest.new_set({
   parametrize = {
-    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
-    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
-    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>", button = "Left" } },
-    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>", button = "Right" } },
-    { "<2-C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left" } },
-    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle" } },
+    { "<C-LeftMouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left", count = "" } },
+    { "<c-leftmouse>", { drag = "<C-LeftDrag>", release = "<C-LeftRelease>", button = "Left", count = "" } },
+    { "<C-M-LeftMouse>", { drag = "<C-M-LeftDrag>", release = "<C-M-LeftRelease>", button = "Left", count = "" } },
+    { "<A-RightMouse>", { drag = "<M-RightDrag>", release = "<M-RightRelease>", button = "Right", count = "" } },
+    -- A double click's drag and release carry its count.
+    { "<2-C-LeftMouse>", { drag = "<2-C-LeftDrag>", release = "<2-C-LeftRelease>", button = "Left", count = "2-" } },
+    { "<MiddleMouse>", { drag = "<MiddleDrag>", release = "<MiddleRelease>", button = "Middle", count = "" } },
     { "gf", nil },
     { "<C-LeftRelease>", nil },
   },
@@ -321,7 +322,13 @@ T["click_keys()"] = MiniTest.new_set({
 T["click_keys()"]["for %s"] = function(lhs, want)
   -- Compared as keys: `<M-C-LeftDrag>` is `<C-M-LeftDrag>`.
   local function codes(keys)
-    return keys and { drag = vim.keycode(keys.drag), release = vim.keycode(keys.release), button = keys.button }
+    return keys
+      and {
+        drag = vim.keycode(keys.drag),
+        release = vim.keycode(keys.release),
+        button = keys.button,
+        count = keys.count,
+      }
   end
   eq(codes(require("duet.links").click_keys(lhs)), codes(want))
 end
@@ -1340,6 +1347,296 @@ T["mouse"]["Ctrl+click on another window does what it does without duet"] = func
   child.api.nvim_input(("<C-LeftMouse><%d,%d>"):format(pos[2], pos[1]))
   opened()
   eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
+end
+
+---Click the top left of the code window with `keys` (e.g. "2<C-LeftMouse>").
+---@param code integer the code window
+---@param keys string
+local function click_code(code, keys)
+  local pos = child.lua_get("vim.fn.win_screenpos(...)", { code })
+  child.api.nvim_input(("%s<%d,%d>"):format(keys, pos[2] - 1, pos[1] - 1))
+end
+
+T["mouse"]["Ctrl+click on another window runs your own mapping"] = MiniTest.new_set({
+  parametrize = {
+    -- { how, mode clicked in, mapping (Lua, sets _G.hit), keys, want }
+    {
+      "a Normal-mode callback, with the count",
+      "n",
+      [[vim.keymap.set("n", "<C-LeftMouse>", function()
+        _G.hit = { mode = vim.api.nvim_get_mode().mode, count = vim.v.count }
+      end)]],
+      "2<C-LeftMouse>",
+      { mode = "nt", count = 2, code = false },
+    },
+    {
+      "a Normal-mode callback, from Terminal mode",
+      "t",
+      [[vim.keymap.set("n", "<C-LeftMouse>", function()
+        _G.hit = { mode = vim.api.nvim_get_mode().mode, count = vim.v.count }
+      end)]],
+      "<C-LeftMouse>",
+      { mode = "nt", count = 0, code = false },
+    },
+    {
+      "a Terminal-mode callback",
+      "t",
+      [[vim.keymap.set("t", "<C-LeftMouse>", function()
+        _G.hit = { mode = vim.api.nvim_get_mode().mode, count = vim.v.count }
+      end)]],
+      "<C-LeftMouse>",
+      { mode = "t", count = 0, code = false },
+    },
+    {
+      "keys",
+      "n",
+      [[vim.keymap.set("n", "<C-LeftMouse>", "<LeftMouse><Cmd>lua _G.hit = { count = vim.v.count }<CR>")]],
+      "<C-LeftMouse>",
+      { count = 0, code = true },
+    },
+    {
+      "keys, with the count",
+      "n",
+      [[vim.keymap.set("n", "<C-LeftMouse>", "<Cmd>lua _G.hit = { count = vim.v.count }<CR>")]],
+      "3<C-LeftMouse>",
+      { count = 3, code = false },
+    },
+    {
+      "keys that start with the click, remapped",
+      "n",
+      -- Their <C-LeftMouse> is Neovim's, not this mapping again: before 0.13, a jump to tag "foo".
+      [[vim.keymap.set("n", "<C-LeftMouse>", "<C-LeftMouse><Cmd>lua _G.hit = { count = 0 }<CR>", { remap = true })]],
+      "<C-LeftMouse>",
+      { count = 0, code = true, name = "a.lua" },
+    },
+    {
+      "the register",
+      "n",
+      [[vim.keymap.set("n", "<C-LeftMouse>", "<Cmd>lua _G.hit = { count = vim.v.count, register = vim.v.register }<CR>")]],
+      '"a2<C-LeftMouse>',
+      { count = 2, register = "a", code = false },
+    },
+    {
+      "a Vimscript expression in its script",
+      "n",
+      [[local file = vim.fn.tempname() .. ".vim"
+      vim.fn.writefile({
+        "function! s:Pick() abort",
+        "  return \"\\<Cmd>lua _G.hit = { count = vim.v.count }\\<CR>\"",
+        "endfunction",
+        "nnoremap <expr> <C-LeftMouse> <SID>Pick()",
+      }, file)
+      vim.cmd.source(file)]],
+      "2<C-LeftMouse>",
+      { count = 2, code = false },
+    },
+    {
+      "a Vimscript expression with keys in its {rhs}",
+      "n",
+      [[vim.cmd("nnoremap <expr> <C-LeftMouse> v:count ? '<Cmd>lua _G.hit = { count = vim.v.count }<CR>' : ''")]],
+      "4<C-LeftMouse>",
+      { count = 4, code = false },
+    },
+    {
+      "keys with <script>, which map only script-local keys",
+      "n",
+      [[vim.keymap.set("n", "zz", "<Cmd>lua _G.wrong = true<CR>")
+      vim.cmd("nmap <script> <C-LeftMouse> <LeftMouse>zz<Cmd>lua _G.hit = { count = 0 }<CR>")]],
+      "<C-LeftMouse>",
+      { count = 0, code = true },
+    },
+    {
+      "a remapped expression whose keys start with the click",
+      "n",
+      [[vim.cmd("nmap <expr> <C-LeftMouse> '<C-LeftMouse><Cmd>lua _G.hit = { count = 0 }<CR>'")]],
+      "<C-LeftMouse>",
+      { count = 0, code = true, name = "a.lua" },
+    },
+    {
+      "Terminal-mode keys that start with the click",
+      "t",
+      -- Neovim's click leaves Terminal mode; the rest runs in Normal mode.
+      [[vim.cmd("tmap <C-LeftMouse> <C-LeftMouse><Cmd>lua _G.hit = { mode = vim.api.nvim_get_mode().mode, count = 0 }<CR>")]],
+      "<C-LeftMouse>",
+      { mode = "n", count = 0, code = true, name = "a.lua" },
+    },
+    {
+      "a mapping for all modes",
+      "n",
+      [[vim.cmd("map <C-LeftMouse> <Cmd>lua _G.hit = { count = 0 }<CR>")]],
+      "<C-LeftMouse>",
+      { count = 0, code = false },
+    },
+    {
+      "an expression",
+      "t",
+      [[vim.keymap.set("n", "<C-LeftMouse>", function()
+        _G.hit = { count = vim.v.count }
+        return "<LeftMouse>"
+      end, { expr = true })]],
+      "<C-LeftMouse>",
+      { count = 0, code = true },
+    },
+  },
+})
+
+T["mouse"]["Ctrl+click on another window runs your own mapping"]["%s"] = function(_, mode, mapping, keys, want)
+  child.fn.writefile({ "foo\ta.lua\t1" }, root .. "/tags")
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  child.api.nvim_buf_set_lines(child.api.nvim_win_get_buf(code), 0, -1, false, { "foo" })
+  child.lua(mapping)
+  if mode == "t" then
+    terminal_mode()
+  else
+    child.lua("vim.api.nvim_set_current_win(s:window())")
+  end
+  if want.name and child.fn.has("nvim-0.13") == 1 then
+    -- There Neovim's own CTRL-click toggles a multicursor instead, without changing windows.
+    want = vim.tbl_extend("force", want, { code = false, name = false, mode = want.mode and "nt" })
+  end
+  click_code(code, keys)
+  eq(child.lua_get("wait(function() return _G.hit ~= nil end)"), true)
+  local hit = child.lua_get("_G.hit")
+  eq({ hit.mode, hit.count, hit.register }, { want.mode, want.count, want.register })
+  eq(child.lua_get("_G.wrong"), vim.NIL)
+  -- The code window is current only if the mapping clicked it: <C-LeftMouse> itself
+  -- would make it so.
+  eq(
+    child.lua(
+      "local code = ...; return wait(function() return vim.api.nvim_get_current_win() == code end, 200)",
+      { code }
+    ),
+    want.code
+  )
+  if want.name then
+    eq(rel(child.lua_get("where().name")), want.name)
+  end
+  eq(child.lua_get("vim.v.errmsg"), "")
+  -- duet's own mapping is back, and nothing else is left in the terminal.
+  local maps = child.lua_get([[vim.api.nvim_buf_call(s.buf, function()
+    return {
+      vim.fn.maparg("<C-LeftMouse>", "n", false, true).desc,
+      vim.fn.maparg("<C-LeftMouse>", "t", false, true).desc,
+      vim.fn.maparg("<C-LeftMouse>", "x", false, true).buffer or 0,
+    }
+  end)]])
+  eq(maps, { "duet: open the file link clicked", "duet: open the file link clicked", 0 })
+end
+
+T["mouse"]["your mapping can end waiting for a key"] = function()
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  child.api.nvim_buf_set_lines(child.api.nvim_win_get_buf(code), 0, -1, false, { "foo" })
+  child.lua([[vim.keymap.set("n", "<C-LeftMouse>", "<LeftMouse>r")]])
+  child.lua("vim.api.nvim_set_current_win(s:window())")
+  click_code(code, "<C-LeftMouse>")
+  child.api.nvim_input("x")
+  eq(
+    child.lua(
+      "local buf = ...; return wait(function() return vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == 'xoo' end)",
+      {
+        child.api.nvim_win_get_buf(code),
+      }
+    ),
+    true
+  )
+  eq(
+    child.lua_get(
+      "vim.api.nvim_buf_call(s.buf, function() return vim.fn.maparg('<C-LeftMouse>', 'n', false, true).desc end)"
+    ),
+    "duet: open the file link clicked"
+  )
+end
+
+T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"] = MiniTest.new_set({
+  -- Neovim counts a fifth press as one again.
+  parametrize = { { "double", 2 }, { "triple", 3 }, { "five-times", 5 } },
+})
+
+T["mouse"]["a double Ctrl+click on a link opens it once, until the next key"]["%s"] = function(_, presses)
+  agent(TRACK .. "printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  local listeners = child.lua_get("vim.on_key()")
+  child.lua([[local open = L.open
+    L.open = function(...)
+      _G.opens = (_G.opens or 0) + 1
+      return open(...)
+    end]])
+  terminal_mode()
+  local rest = { "<C-LeftRelease>" }
+  for _ = 2, presses do
+    vim.list_extend(rest, { "<C-LeftMouse>", "<C-LeftDrag>", "<C-LeftRelease>" })
+  end
+  click("a.lua", nil, 0, table.concat(rest, " "))
+  opened()
+  vim.uv.sleep(100)
+  eq(child.lua_get("{ vim.api.nvim_get_current_win(), vim.v.errmsg }"), { code, "" })
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("_G.opens"), 1)
+  eq(reports(), {})
+  -- The next key typed ends it.
+  child.type_keys("<Esc>")
+  eq(child.lua_get("vim.on_key()"), listeners)
+end
+
+T["mouse"]["a double Ctrl+click on text without a link does nothing"] = function()
+  agent(TRACK .. "printf 'nothing here\\n'")
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftRelease> <C-LeftMouse> <C-LeftRelease>")
+  vim.uv.sleep(100)
+  eq(reports(), {})
+  eq(child.lua_get("{ vim.api.nvim_get_mode().mode, vim.v.errmsg }"), { "t", "" })
+end
+
+T["mouse"]["a Ctrl+click elsewhere right after a quadruple click is a new click"] = function()
+  -- Neovim counts it as one, as a fifth press at the same place would be. In the window
+  -- the link opened in, duet does not map it, so Neovim's own CTRL-click runs. That one
+  -- must stay unmapped: duet never drops a press a mapping takes.
+  child.fn.writefile({ "a\tb.lua\t1" }, root .. "/tags")
+  agent("printf 'a.lua:1\\n'")
+  local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
+  terminal_mode()
+  local rest = { "<C-LeftRelease>" }
+  for _ = 2, 4 do
+    vim.list_extend(rest, { "<C-LeftMouse>", "<C-LeftRelease>" })
+  end
+  click("a.lua", nil, 0, table.concat(rest, " "))
+  opened()
+  click_code(code, "<C-LeftMouse>")
+  if child.fn.has("nvim-0.13") == 1 then
+    -- It toggles a multicursor where you click.
+    local ran = [[wait(function()
+      local ns = vim.api.nvim_create_namespace("nvim.multicursor")
+      return #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {}) > 0
+    end)]]
+    eq(child.lua("return " .. ran), true)
+  else
+    -- It jumps to tag "a".
+    eq(child.lua_get("wait(function() return vim.api.nvim_buf_get_name(0):find('b.lua', 1, true) ~= nil end)"), true)
+  end
+end
+
+T["mouse"]["a double click mapped in terminal.keys keeps its own release"] = function()
+  agent(TRACK .. "printf 'nothing here\\n'", { terminal = { keys = { ["<2-C-LeftMouse>"] = "open_link_mouse" } } })
+  terminal_mode()
+  click("nothing", nil, 2, "<C-LeftRelease> <C-LeftMouse> <C-LeftRelease>")
+  vim.uv.sleep(100)
+  eq(reports(), {})
+  eq(child.lua_get("{ vim.fn.maparg('<2-C-LeftRelease>', 't'), vim.fn.maparg('<C-LeftRelease>', 't') }"), { "", "" })
+  eq(child.lua_get("vim.api.nvim_get_mode().mode"), "t")
+end
+
+T["mouse"]["a Ctrl+click after a double Ctrl+click opens a link again"] = function()
+  agent("printf 'a.lua:1\\nb.lua:1\\n'")
+  terminal_mode()
+  click("a.lua", nil, 0, "<C-LeftRelease> <C-LeftMouse> <C-LeftRelease>")
+  opened()
+  child.o.mousetime = 1 -- the next click is a new one
+  vim.uv.sleep(20)
+  terminal_mode()
+  click("b.lua")
+  eq(child.lua_get("wait(function() return vim.api.nvim_buf_get_name(0):find('b.lua', 1, true) ~= nil end)"), true)
 end
 
 T["mouse"]["the click can be rebound"] = function()
