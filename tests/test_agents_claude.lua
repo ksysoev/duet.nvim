@@ -550,6 +550,48 @@ local ready_cases = {
     ready = true,
   },
   {
+    name = "an old box with a ❯ on a later line above an indented result",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "  ⎿  Interrupted · What should Claude do instead?" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above dialog text indented by two spaces",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "  Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above an indented spinner",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "", "  ✻ Thinking…" },
+    ready = false,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, in shell mode's footer",
+    lines = { RULE, "!\194\160echo a", "  a ❯ b", RULE, "  ! for shell mode" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, the shortcuts hint and a notice",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  ? for shortcuts", "  ⚠ Transcript saving is off" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, manual mode",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  ⏸ manual mode on · esc to interrupt" },
+    ready = true,
+  },
+  {
+    name = "a multi-line slash command with a ❯ on a later line and its menu open",
+    lines = {
+      RULE,
+      "❯\194\160/clear",
+      "  a ❯ b",
+      RULE,
+      "  ❯ /clear   Start a new session",
+      "    /compact   Free up context",
+    },
+    ready = true,
+  },
+  {
     name = "a box with a ❯ on a later line, cut off at the bottom",
     lines = { RULE, "❯\194\160first", "  a ❯ b" },
     ready = false,

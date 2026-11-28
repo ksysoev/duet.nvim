@@ -235,14 +235,27 @@ local function menu_prompt(lines, i)
   return nil
 end
 
----Whether `line` can be a row below the live input box: the footer (`  ⏵⏵ …`,
----`  ? for shortcuts`), a notice, the slash-command menu, or a blank line. All are indented
----by at least two spaces. A dialog's text is indented by one space, and newer output starts
----in the first column (`⏺ …`, a rule).
+-- The symbols that start a footer row below the live input box, after two spaces:
+-- `  ⏵⏵ auto mode on`, `  ⏸ manual mode on`, `  ! for shell mode`, `  ? for shortcuts`,
+-- `  ⚠ Transcript saving is off`.
+local FOOTER_SYMBOLS = { "⏵", "⏸", "!", "?", "⚠" }
+
+---Whether `line` can be a row below the live input box: a blank line, a footer row (see
+---FOOTER_SYMBOLS), or a row indented by four spaces or more (the slash-command menu, a
+---right-aligned hint such as `ctrl+y to paste deleted text`). Other rows, such as dialog
+---text, a `  ⎿ …` result or newer output, mean the box above them is an older frame.
 ---@param line string
 ---@return boolean
 local function is_footer_row(line)
-  return line:match("^%s*$") ~= nil or line:match("^  ") ~= nil
+  if line:match("^%s*$") or line:match("^    ") then
+    return true
+  end
+  for _, symbol in ipairs(FOOTER_SYMBOLS) do
+    if vim.startswith(line, "  " .. symbol) then
+      return true
+    end
+  end
+  return false
 end
 
 ---If line `i` is part of the input box at the bottom of the screen (its prompt line or a
@@ -286,10 +299,10 @@ end
 ---The first line of the live input box: a prompt line (see is_prompt) right below a
 ---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
 ---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
----screen counts: an older frame left in the scrollback above a dialog doesn't. The
----`❯` in the input box's text and the slash-command menu's `❯` don't count (see last_marker). The last such prompt line
----counts: in shell mode the live box starts with `!`, so an older box can sit between
----the last `❯` and it. nil if there is none.
+---screen counts: an older frame left in the scrollback above a dialog doesn't. A `❯` in
+---the input box's text and the slash-command menu's `❯` don't count (see last_marker).
+---The last such prompt line counts: in shell mode the live box starts with `!`, so an
+---older box can sit between the last `❯` and it. nil if there is none.
 ---@param lines string[]
 ---@return integer|nil
 local function live_prompt(lines)
