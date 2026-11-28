@@ -235,15 +235,53 @@ local function menu_prompt(lines, i)
   return nil
 end
 
----The index of the last line that marks a choice with `❯`, or 1 if none does. Typing `/`
----opens the slash-command menu below the input box, and its selected entry is marked
----like a dialog's choice: the box's prompt counts instead (see menu_prompt).
+---Whether `line` can be a row below the live input box: a blank line, or a row indented
+---by two spaces or more (the footer such as `  ⏵⏵ auto mode on`, notices, a status line,
+---the slash-command menu, right-aligned hints). Newer content starts further left: output
+---(`⏺ …`) and spinners in the first column, dialog text after one space, rules. A tool
+---result (`  ⎿ …`) is indented like the footer but only comes below newer output.
+---@param line string
+---@return boolean
+local function is_footer_row(line)
+  if line:match("^%s*$") then
+    return true
+  end
+  return line:match("^  ") ~= nil and not line:match("^%s*⎿")
+end
+
+---If line `i` is part of the input box at the bottom of the screen (its prompt line or a
+---later line of a multi-line input, above the box's closing rule, with only footer rows
+---below that rule), the box's prompt line. The text in that box is the user's, so a `❯`
+---there, such as a pasted shell prompt, marks no choice. An older box left above a dialog
+---or newer output doesn't count, nor does a box cut off at the bottom: it has no closing
+---rule, and its lines can't be told from a dialog's.
+---@param lines string[]
+---@param i integer
+---@return integer|nil
+local function enclosing_prompt(lines, i)
+  for j = i + 1, #lines do
+    if is_rule(lines[j]) then
+      for k = j + 1, #lines do
+        if not is_footer_row(lines[k]) then
+          return nil
+        end
+      end
+      return box_prompt(lines, j)
+    end
+  end
+  return nil
+end
+
+---The index of the last line that marks a choice with `❯`, or 1 if none does. A `❯` in
+---an input box marks nothing: the box's prompt counts instead (see enclosing_prompt).
+---Typing `/` opens the slash-command menu below the input box, and its selected entry is
+---marked like a dialog's choice: the box's prompt counts instead (see menu_prompt).
 ---@param lines string[]
 ---@return integer
 local function last_marker(lines)
   for i = #lines, 1, -1 do
     if lines[i]:find("❯", 1, true) then
-      return menu_prompt(lines, i) or i
+      return enclosing_prompt(lines, i) or menu_prompt(lines, i) or i
     end
   end
   return 1
@@ -252,10 +290,10 @@ end
 ---The first line of the live input box: a prompt line (see is_prompt) right below a
 ---horizontal rule. Dialogs (folder trust, permission prompts) replace the input box and
 ---mark their choice with an indented `❯`, so only a prompt at or below the last `❯` on
----screen counts: an older frame left in the scrollback above a dialog doesn't. The
----slash-command menu's `❯` doesn't count (see last_marker). The last such prompt line
----counts: in shell mode the live box starts with `!`, so an older box can sit between
----the last `❯` and it. nil if there is none.
+---screen counts: an older frame left in the scrollback above a dialog doesn't. A `❯` in
+---the input box's text and the slash-command menu's `❯` don't count (see last_marker).
+---The last such prompt line counts: in shell mode the live box starts with `!`, so an
+---older box can sit between the last `❯` and it. nil if there is none.
 ---@param lines string[]
 ---@return integer|nil
 local function live_prompt(lines)

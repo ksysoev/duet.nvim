@@ -467,6 +467,145 @@ local ready_cases = {
     lines = { "⏺ an answer", RULE, "  ❯ /clear   Start a new session" },
     ready = false,
   },
+  {
+    name = "a multi-line input with a ❯ on a later line",
+    lines = { RULE, "❯\194\160ls output:", "  prompt ❯ here", RULE, "  ⏵⏵ auto mode on" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ in the first column of a later line",
+    lines = { RULE, "❯\194\160first", "❯ second", RULE },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a later line like a menu choice",
+    lines = { RULE, "❯\194\160first", "  ❯ /clear   Start a new session", RULE },
+    ready = true,
+  },
+  {
+    name = "shell mode with a ❯ on a later line",
+    lines = { RULE, "!\194\160echo a", "  prompt ❯ here", RULE },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, below an older box",
+    lines = { RULE, "❯ old text", RULE, "⏺ an answer", RULE, "❯\194\160first", "  a ❯ b", RULE },
+    ready = true,
+  },
+  {
+    name = "an old box with a ❯ on a later line above a permission dialog",
+    lines = {
+      RULE,
+      "❯ first",
+      "  a ❯ b",
+      RULE,
+      "⏺ Bash(touch created.txt)",
+      RULE,
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    },
+    ready = false,
+  },
+  {
+    name = "a dialog with a rule below it, right below an old input box",
+    lines = { RULE, "❯ ", RULE, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", RULE },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above a dialog without a choice marker",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above a dialog's text without a rule",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above newer output",
+    lines = {
+      RULE,
+      "❯ first",
+      "  a ❯ b",
+      RULE,
+      "⏺ Bash(x)",
+      RULE,
+      " Do you want to proceed?",
+      " Yes / No",
+    },
+    ready = false,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line and a notice below the footer",
+    lines = {
+      RULE,
+      "❯\194\160first",
+      "  a ❯ b",
+      RULE,
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      string.rep(" ", 70) .. "ctrl+y to paste deleted text",
+      "",
+    },
+    ready = true,
+  },
+  {
+    name = "an old box with a ❯ on a later line above an indented result",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "  ⎿  Interrupted · What should Claude do instead?" },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above newer output in the first column",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "⏺ Done." },
+    ready = false,
+  },
+  {
+    name = "an old box with a ❯ on a later line above a spinner",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "", "✻ Thinking…" },
+    ready = false,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, in shell mode's footer",
+    lines = { RULE, "!\194\160echo a", "  a ❯ b", RULE, "  ! for shell mode" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, the shortcuts hint and a notice",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  ? for shortcuts", "  ⚠ Transcript saving is off" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, manual mode",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  ⏸ manual mode on · esc to interrupt" },
+    ready = true,
+  },
+  {
+    name = "a multi-line slash command with a ❯ on a later line and its menu open",
+    lines = {
+      RULE,
+      "❯\194\160/clear",
+      "  a ❯ b",
+      RULE,
+      "  ❯ /clear   Start a new session",
+      "    /compact   Free up context",
+    },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line and a status line",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  [Opus] ~/dev/duet main", "  ⏵⏵ auto mode on" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line and an exit hint",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  Press Ctrl-C again to exit" },
+    ready = true,
+  },
+  {
+    name = "a box with a ❯ on a later line, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  a ❯ b" },
+    ready = false,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({
@@ -535,6 +674,11 @@ local input_cases = {
     name = "shell mode below an older box",
     lines = { R80, "❯ old text", R80, "⏺ an answer", R80, "!" .. NBSP .. "ls", R80 },
     input = "!" .. NBSP .. "ls",
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line",
+    lines = { R80, "❯" .. NBSP .. "ls output:", "  prompt ❯ here", R80, "  ⏵⏵ auto mode on" },
+    input = "❯" .. NBSP .. "ls output:\n  prompt ❯ here",
   },
   { name = "no input box", lines = vim.list_slice(READY, 1, 3), input = vim.NIL },
   {
