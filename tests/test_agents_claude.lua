@@ -467,6 +467,56 @@ local ready_cases = {
     lines = { "⏺ an answer", RULE, "  ❯ /clear   Start a new session" },
     ready = false,
   },
+  {
+    name = "a multi-line input with a ❯ on a later line",
+    lines = { RULE, "❯\194\160ls output:", "  prompt ❯ here", RULE, "  ⏵⏵ auto mode on" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ in the first column of a later line",
+    lines = { RULE, "❯\194\160first", "❯ second", RULE },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a later line like a menu choice",
+    lines = { RULE, "❯\194\160first", "  ❯ /clear   Start a new session", RULE },
+    ready = true,
+  },
+  {
+    name = "shell mode with a ❯ on a later line",
+    lines = { RULE, "!\194\160echo a", "  prompt ❯ here", RULE },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line, below an older box",
+    lines = { RULE, "❯ old text", RULE, "⏺ an answer", RULE, "❯\194\160first", "  a ❯ b", RULE },
+    ready = true,
+  },
+  {
+    name = "an old box with a ❯ on a later line above a permission dialog",
+    lines = {
+      RULE,
+      "❯ first",
+      "  a ❯ b",
+      RULE,
+      "⏺ Bash(touch created.txt)",
+      RULE,
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    },
+    ready = false,
+  },
+  {
+    name = "a dialog with a rule below it, right below an old input box",
+    lines = { RULE, "❯ ", RULE, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", RULE },
+    ready = false,
+  },
+  {
+    name = "a box with a ❯ on a later line, cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  a ❯ b" },
+    ready = false,
+  },
 }
 
 T["format_ref()"] = MiniTest.new_set({
@@ -535,6 +585,11 @@ local input_cases = {
     name = "shell mode below an older box",
     lines = { R80, "❯ old text", R80, "⏺ an answer", R80, "!" .. NBSP .. "ls", R80 },
     input = "!" .. NBSP .. "ls",
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line",
+    lines = { R80, "❯" .. NBSP .. "ls output:", "  prompt ❯ here", R80, "  ⏵⏵ auto mode on" },
+    input = "❯" .. NBSP .. "ls output:\n  prompt ❯ here",
   },
   { name = "no input box", lines = vim.list_slice(READY, 1, 3), input = vim.NIL },
   {

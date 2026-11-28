@@ -235,15 +235,32 @@ local function menu_prompt(lines, i)
   return nil
 end
 
----The index of the last line that marks a choice with `❯`, or 1 if none does. Typing `/`
----opens the slash-command menu below the input box, and its selected entry is marked
----like a dialog's choice: the box's prompt counts instead (see menu_prompt).
+---If line `i` is part of an input box (its prompt line or a later line of a multi-line
+---input, above the box's closing rule), the box's prompt line. The text in a box is the
+---user's, so a `❯` there, such as a pasted shell prompt, marks no choice. A box cut off at
+---the bottom has no closing rule and doesn't count: its lines can't be told from a dialog.
+---@param lines string[]
+---@param i integer
+---@return integer|nil
+local function enclosing_prompt(lines, i)
+  for j = i + 1, #lines do
+    if is_rule(lines[j]) then
+      return box_prompt(lines, j)
+    end
+  end
+  return nil
+end
+
+---The index of the last line that marks a choice with `❯`, or 1 if none does. A `❯` in
+---an input box marks nothing: the box's prompt counts instead (see enclosing_prompt).
+---Typing `/` opens the slash-command menu below the input box, and its selected entry is
+---marked like a dialog's choice: the box's prompt counts instead (see menu_prompt).
 ---@param lines string[]
 ---@return integer
 local function last_marker(lines)
   for i = #lines, 1, -1 do
     if lines[i]:find("❯", 1, true) then
-      return menu_prompt(lines, i) or i
+      return enclosing_prompt(lines, i) or menu_prompt(lines, i) or i
     end
   end
   return 1
