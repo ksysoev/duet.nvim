@@ -849,6 +849,8 @@ T["terminal"]["a modified code window that can be left"] = MiniTest.new_set({
     { "'hidden'", "vim.o.hidden = true" },
     { "'bufhidden' hide", "vim.bo.bufhidden = 'hide'" },
     { "'autowriteall'", "vim.o.autowriteall = true" },
+    -- 'confirm' is off only while `:edit` runs: the write still happens.
+    { "'autowriteall' and 'confirm'", "vim.o.autowriteall = true; vim.o.confirm = true" },
     -- Neovim keeps a buffer shown in another window, in any tab.
     { "the buffer in another tab", "vim.cmd('tab split | tabprevious')" },
   },
@@ -863,9 +865,11 @@ T["terminal"]["a modified code window that can be left"]["is used with %s"] = fu
   eq(child.lua_get("vim.api.nvim_get_current_win()"), code)
   eq(rel(child.lua_get("where().name")), "a.lua")
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
-  if kind == "'autowriteall'" then
+  if kind:find("'autowriteall'", 1, true) then
     eq(vim.fn.readfile(root .. "/b.lua"), { "changed" })
   end
+  -- The file it showed is its alternate file, as after any `:edit`.
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.fn.bufnr('#'))")), "b.lua")
 end
 
 -- 'autowriteall' lets the window go, but its write fails: `:edit` then fails with E37 in
@@ -977,9 +981,12 @@ T["terminal"]["a code window where :edit fails"]["keeps a buffer an autocmd made
   eq(child.lua_get("vim.api.nvim_buf_is_valid(_G.scratch)"), true)
 end
 
-T["terminal"]["a code window where :edit fails"]["is not left after Abort at the swap file prompt"] = function()
-  -- A swap file for a.lua, as another Neovim would leave it.
-  child.lua([[
+---Leave a swap file for a.lua, as another Neovim would, and answer its ATTENTION prompt
+---with `choice` ("a" Abort, "q" Quit), counting the prompts in `_G.prompts`.
+---@param choice string
+local function swap_file(choice)
+  child.lua(
+    [[
     vim.o.directory = vim.fn.tempname() .. "//"
     vim.fn.mkdir(vim.o.directory, "p")
     vim.o.swapfile = true
@@ -991,13 +998,29 @@ T["terminal"]["a code window where :edit fails"]["is not left after Abort at the
     vim.cmd("bwipeout!")
     vim.fn.writefile(copy, swap)
     _G.prompts = 0
+    local choice = ...
     vim.api.nvim_create_autocmd("SwapExists", {
       callback = function()
         _G.prompts = _G.prompts + 1
-        vim.v.swapchoice = "a"
+        vim.v.swapchoice = choice
       end,
     })
-  ]])
+  ]],
+    { choice }
+  )
+end
+
+-- The notifications that report a.lua could not be opened: Neovim also notes that the
+-- swap file's owner is running (W325).
+local REPORTED = [[vim.tbl_map(function(n) return n.msg end,
+  vim.tbl_filter(function(n) return n.msg:find("cannot open", 1, true) end, _G.notes))]]
+
+-- In the current window, from inside it.
+local ALT = "vim.api.nvim_win_call(..., function() return vim.fn.bufnr('#') end)"
+local MARK = "vim.api.nvim_win_call(..., function() return vim.fn.getpos(\"''\") end)"
+
+T["terminal"]["a code window where :edit fails"]["is not left after Abort at the swap file prompt"] = function()
+  swap_file("a")
   local code = show_code("b.lua")
   agent("printf 'a.lua:1\\n'")
   child.lua("cursor_on('a.lua')")
@@ -1012,6 +1035,139 @@ T["terminal"]["a code window where :edit fails"]["is not left after Abort at the
   eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { code })), "b.lua")
 end
 
+T["terminal"]["a code window where :edit fails"]["is not left after Quit at the swap file prompt"] = function()
+  swap_file("q")
+  local code = show_code("lua/duet/init.lua")
+  child.api.nvim_win_set_cursor(0, { 20, 2 })
+  local buf = child.lua_get("vim.api.nvim_get_current_buf()")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.prompts"), 1)
+  eq(child.lua_get(REPORTED), { "[duet] links: cannot open 'a.lua': :edit did not open it" })
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 2)
+  eq(child.lua_get("where().terminal"), true)
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { code }), buf)
+  -- Not moved or flashed in the window's own buffer.
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(...)", { code }), { 20, 2 })
+  local flashed = [[#vim.api.nvim_buf_get_extmarks(..., vim.api.nvim_create_namespace("duet.links.flash"), 0, -1, {})]]
+  eq(child.lua_get(flashed, { buf }), 0)
+end
+
+T["terminal"]["a file not opened after Quit at the swap file prompt"] = MiniTest.new_set({
+  parametrize = { { "no code window" }, { "a start screen" } },
+})
+
+T["terminal"]["a file not opened after Quit at the swap file prompt"]["leaves the layout with %s"] = function(kind)
+  swap_file("q")
+  local dashboard = kind == "a start screen" and screen("alpha") or nil
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  if kind == "no code window" then
+    child.lua("vim.cmd('only')")
+  end
+  local before = child.lua_get("#vim.api.nvim_tabpage_list_wins(0)")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.prompts"), 1)
+  eq(child.lua_get(REPORTED), { "[duet] links: cannot open 'a.lua': :edit did not open it" })
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+  eq(child.lua_get("{ s:is_visible(), where().terminal }"), { true, true })
+  if dashboard then
+    eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].filetype", { dashboard }), "alpha")
+  end
+end
+
+T["terminal"]["a code window where :edit fails"]["is left in Normal mode after Abort with auto_insert"] = function()
+  swap_file("a")
+  show_code("b.lua")
+  agent("printf 'a.lua:1\\n'", { terminal = { auto_insert = true } })
+  child.lua("cursor_on('a.lua')")
+  child.type_keys([[<C-\><C-n>]])
+  child.lua("cursor_on('a.lua')")
+  eq(child.api.nvim_get_mode().mode, "nt")
+  child.type_keys("gf")
+  eq(#child.lua_get(REPORTED), 1)
+  eq(child.lua_get("where().terminal"), true)
+  eq(child.api.nvim_get_mode().mode, "nt")
+end
+
+T["terminal"]["a code window where :edit fails"]["keeps its context mark and alternate file after Abort"] =
+  MiniTest.new_set({ parametrize = { { "no alternate file" }, { "an unlisted alternate file" } } })
+
+T["terminal"]["a code window where :edit fails"]["keeps its context mark and alternate file after Abort"]["with %s"] = function(
+  kind
+)
+  swap_file("a")
+  local alt = -1
+  if kind == "an unlisted alternate file" then
+    child.cmd("edit c.lua")
+    alt = child.lua_get("vim.api.nvim_get_current_buf()")
+  end
+  local code = show_code("b.lua")
+  if alt ~= -1 then
+    child.lua("vim.bo[...].buflisted = false", { alt })
+  end
+  child.lua("vim.fn.setpos(\"''\", { 0, 1, 1, 0 }); vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  eq(child.lua_get(ALT, { code }), alt)
+  local mark = child.lua_get(MARK, { code })
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(#child.lua_get(REPORTED), 1)
+  eq(child.lua_get(ALT, { code }), alt)
+  eq(child.lua_get(MARK, { code }), mark)
+  if alt ~= -1 then
+    eq(child.lua_get("vim.bo[...].buflisted", { alt }), false)
+  end
+end
+
+T["terminal"]["a code window where :edit fails"]["keeps its alternate file when the file has a buffer"] = function()
+  local code = show_modified("b.lua", FAILING_WRITE)
+  child.cmd("badd a.lua")
+  -- No other file: `:edit` reused the first, empty buffer, which is then its own.
+  local alt = child.lua_get(ALT, { code })
+  eq(alt, child.lua_get("vim.api.nvim_win_get_buf(...)", { code }))
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.lua_get("_G.notes"), {})
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("vim.api.nvim_get_current_win() ~= ...", { code }), true)
+  eq(child.lua_get(ALT, { code }), alt)
+end
+
+T["terminal"]["a code window where :edit fails"]["is left with 'confirm', without asking"] = MiniTest.new_set({
+  parametrize = {
+    { "a failing BufWriteCmd", FAILING_WRITE },
+    -- No error: the buffer is still modified after the write, which Neovim counts as failed.
+    {
+      "a BufWriteCmd that writes nothing",
+      [[
+        vim.o.autowriteall = true
+        vim.api.nvim_create_autocmd("BufWriteCmd", { buffer = 0, callback = function() end })
+      ]],
+    },
+  },
+})
+
+T["terminal"]["a code window where :edit fails"]["is left with 'confirm', without asking"]["with %s"] = function(
+  _,
+  setup
+)
+  local code = show_modified("b.lua", setup .. "\nvim.o.confirm = true")
+  local buf = child.lua_get("vim.api.nvim_get_current_buf()")
+  agent("printf 'a.lua:1\\n'")
+  child.lua("cursor_on('a.lua')")
+  child.type_keys("gf")
+  eq(child.api.nvim_get_mode().blocking, false)
+  eq(child.lua_get("_G.notes"), {})
+  eq(rel(child.lua_get("where().name")), "a.lua")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
+  eq(child.lua_get("vim.api.nvim_win_get_buf(...)", { code }), buf)
+  eq(child.lua_get("vim.bo[...].modified", { buf }), true)
+  eq(child.o.confirm, true)
+end
+
 T["terminal"]["a code window where :edit fails"]["is left for another code window"] = function()
   local free = show_code("c.lua")
   child.cmd("split")
@@ -1023,6 +1179,23 @@ T["terminal"]["a code window where :edit fails"]["is left for another code windo
   eq(child.lua_get("vim.api.nvim_get_current_win()"), free)
   eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 3)
   eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].modified", { code }), true)
+end
+
+T["terminal"]["a code window where :edit fails"]["is left for each such code window in turn"] = function()
+  local other = show_modified("c.lua", FAILING_WRITE)
+  child.cmd("split")
+  local code = show_modified("b.lua", FAILING_WRITE)
+  agent("printf 'a.lua:1\\n'")
+  follow_from(code)
+  eq(child.lua_get("_G.notes"), {})
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 4)
+  local opened = child.lua_get("vim.api.nvim_get_current_win()")
+  eq(opened ~= code and opened ~= other, true)
+  for _, win in ipairs({ code, other }) do
+    eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(...)].modified", { win }), true)
+  end
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { code })), "b.lua")
+  eq(rel(child.lua_get("vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))", { other })), "c.lua")
 end
 
 T["terminal"]["a code window where :edit fails"]["is reported once when the split fails too"] = function()
