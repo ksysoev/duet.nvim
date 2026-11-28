@@ -763,7 +763,8 @@ S["reports a failure to show an exit not seen yet"] = function()
 end
 
 S["finds the prompt above many blank lines"] = function()
-  -- READY, then 300 blank rows, as on a very tall terminal.
+  -- READY, then 300 blank rows on a terminal tall enough to keep READY on its screen.
+  child.o.lines = 400
   fake(
     [[stty raw -echo; printf 'READY\r\n'; i=0; while [ $i -lt 300 ]; do printf '\r\n'; i=$((i+1)); done; exec cat > "$OUT"]]
   )

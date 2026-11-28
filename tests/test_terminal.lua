@@ -1026,8 +1026,11 @@ T["ready lines"]["take the height the terminal had when it was hidden"] = functi
   -- Shrink the terminal's window to 30 rows and hide it, with no readiness check in between.
   child.lua("local win = s:window(); vim.cmd('new'); vim.api.nvim_win_set_height(win, 30); vim.cmd('redraw')")
   child.lua("s:hide()")
+  -- Neovim resizes the terminal on a later event, also while it is hidden; until then the
+  -- 30 bottom rows are blank, so wait as a send does.
+  eq(child.lua_get("wait(function() s:is_ready(); return _G.got[#_G.got] == 50 end)"), true)
   eq(child.lua_get("s:is_ready()"), false)
-  eq(child.lua_get("_G.got"), { 82, 50 })
+  eq(child.lua_get("_G.got[1]"), 82)
 end
 
 T["ready lines"]["leave out Neovim's autocmd window"] = function()
@@ -1046,6 +1049,23 @@ T["ready lines"]["take the layout's height for a terminal never shown"] = functi
   eq(child.lua_get("s:is_visible()"), false)
   eq(child.lua_get("{ s:is_ready(), s:input() }"), { true, "TOP" })
   eq(child.lua_get("_G.got"), { 82, 82 })
+end
+
+T["ready lines"]["are none while the screen is blank, not the scrollback's"] = function()
+  child.o.lines = 120
+  -- TOP and 130 more lines scroll TOP into the scrollback; after a key the screen is cleared,
+  -- with nothing drawn again.
+  tall_output(
+    {},
+    nil,
+    "echo TOP; i=1; while [ $i -le 130 ]; do echo line $i; i=$((i+1)); done;"
+      .. " echo END; read x; printf '\\033[2J\\033[H'; exec cat"
+  )
+  eq(child.lua_get("{ s:is_ready(), _G.got[1] > 0 }"), { false, true })
+  child.lua("vim.fn.chansend(s.job, '\\r')")
+  eq(child.lua_get("wait(function() s:is_ready(); return _G.got[#_G.got] == 0 end)"), true)
+  eq(child.lua_get("{ s:is_ready(), s:input() == nil, _G.got[#_G.got] }"), { false, true, 0 })
+  eq(child.lua_get("table.concat(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)):find('TOP', 1, true) ~= nil"), true)
 end
 
 T["hidden start"] = MiniTest.new_set()
@@ -2026,6 +2046,84 @@ for _, case in ipairs(tail_cases) do
   T["tail()"][case.name] = function()
     h.reset_modules()
     eq(require("duet.terminal").tail(case.lines, case.n), case.expected)
+  end
+end
+
+-- Buffer lines for last_lines(): `old` lines of scrollback ("old 1"…), then a screen of
+-- `rows` rows holding `screen` at its top.
+local function screen_buffer(old, rows, screen)
+  local lines = {}
+  for i = 1, old do
+    lines[#lines + 1] = "old " .. i
+  end
+  for i = 1, rows do
+    lines[#lines + 1] = screen[i] or ""
+  end
+  return lines
+end
+
+local last_lines_cases = {
+  { name = "empty buffer", lines = {}, n = 3, rows = 5, expected = {} },
+  { name = "blank screen, known height", lines = screen_buffer(10, 5, {}), n = 3, rows = 5, expected = {} },
+  {
+    name = "blank screen, known height below n",
+    lines = screen_buffer(10, 5, { "  ", "" }),
+    n = 8,
+    rows = 5,
+    expected = {},
+  },
+  {
+    name = "blank screen, unknown height",
+    lines = screen_buffer(10, 5, {}),
+    n = 3,
+    rows = 0,
+    expected = { "old 8", "old 9", "old 10" },
+  },
+  {
+    name = "blank screen, no height",
+    lines = screen_buffer(10, 5, {}),
+    n = 3,
+    expected = { "old 8", "old 9", "old 10" },
+  },
+  {
+    name = "screen taller than the buffer",
+    lines = { "a", "", "" },
+    n = 3,
+    rows = 10,
+    expected = { "a" },
+  },
+  {
+    name = "output at the bottom row",
+    lines = screen_buffer(10, 5, { "", "", "", "", "x" }),
+    n = 3,
+    rows = 5,
+    expected = { "", "", "", "", "x" },
+  },
+  {
+    name = "short screen reads above it",
+    lines = screen_buffer(10, 2, { "a" }),
+    n = 3,
+    rows = 2,
+    expected = { "old 9", "old 10", "a" },
+  },
+  {
+    name = "tall screen from its top",
+    lines = screen_buffer(10, 6, { "a", "b", "c" }),
+    n = 2,
+    rows = 6,
+    expected = { "a", "b", "c" },
+  },
+}
+
+T["last_lines()"] = MiniTest.new_set()
+for _, case in ipairs(last_lines_cases) do
+  T["last_lines()"][case.name] = function()
+    h.reset_modules()
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, case.lines)
+    local got = require("duet.terminal").last_lines(buf, case.n, case.rows)
+    vim.api.nvim_buf_delete(buf, { force = true })
+    eq(got, case.expected)
   end
 end
 

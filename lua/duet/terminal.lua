@@ -38,9 +38,10 @@ local FILETYPE = "duet_terminal"
 -- Readiness polling (Session:when_ready): how often, and how many lines the adapter's
 -- is_ready and read_input see at least. They see the terminal's screen down to its last
 -- non-blank row, or the last READY_LINES lines ending there if those reach higher (also for a
--- terminal started hidden where no float could be opened, see call_hidden()). The live input
--- box is on the screen, however tall typed input makes it; reading no higher keeps old boxes
--- in the scrollback, which could pass for ready while a dialog is open, out of view.
+-- terminal started hidden where no float could be opened, see call_hidden()), and no lines
+-- while the screen is blank. The live input box is on the screen, however tall typed input
+-- makes it; reading no higher keeps old boxes in the scrollback, which could pass for ready
+-- while a dialog is open, out of view.
 local READY_POLL_MS = 50
 local READY_LINES = 50
 
@@ -1313,20 +1314,23 @@ end
 
 ---The terminal's last `n` lines, trailing blank lines left out. A TUI that renders inline
 ---leaves the rows below its output blank.
----With `rows`, the screen's height, above `n`: from the screen's top row instead, or the last
+---With `rows`, the screen's height: the last non-blank line is looked for on the screen only,
+---so a blank screen (a TUI cleared it before redrawing) gives no lines rather than the
+---scrollback's. Above `n`, the lines start from the screen's top row instead, or are the last
 ---`n` lines if they reach higher (output that ends near the top of a tall screen).
 ---@param buf integer
 ---@param n integer
----@param rows? integer
+---@param rows? integer 0 or nil if unknown
 ---@return string[]
-local function last_lines(buf, n, rows)
+function M.last_lines(buf, n, rows)
   -- Find the last non-blank line, reading back a block at a time: a tall terminal can
   -- have many blank rows below the output.
   local count = vim.api.nvim_buf_line_count(buf)
+  local top = (rows and rows > 0) and math.max(0, count - rows) or 0
   local last = count
   local block = 100
-  while last > 0 do
-    local first = math.max(0, last - block)
+  while last > top do
+    local first = math.max(top, last - block)
     local lines = vim.api.nvim_buf_get_lines(buf, first, last, false)
     local i = #lines
     while i > 0 and vim.trim(lines[i]) == "" do
@@ -1338,6 +1342,9 @@ local function last_lines(buf, n, rows)
     end
     last = first
   end
+  if last == top then
+    return {}
+  end
   local first = last - n
   if rows and rows > n then
     first = math.min(first, count - rows)
@@ -1346,11 +1353,12 @@ local function last_lines(buf, n, rows)
 end
 
 ---The terminal's lines the adapter's is_ready and read_input see: its screen down to the
----last non-blank row, or the last READY_LINES non-blank lines if they reach higher.
+---last non-blank row, or the last READY_LINES non-blank lines if they reach higher; none
+---while the screen is blank (see M.last_lines).
 ---@param self duet.Session
 ---@return string[]
 local function ready_lines(self)
-  return last_lines(self.buf, READY_LINES, screen_rows(self))
+  return M.last_lines(self.buf, READY_LINES, screen_rows(self))
 end
 
 ---Why the session's agent no longer runs in its terminal, or nil while it does.

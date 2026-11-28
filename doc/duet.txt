@@ -541,11 +541,11 @@ Fields:
                   agent's terminal accepts input, given its screen down to
                   the last non-blank row (at least the last 50 lines
                   ending there, and just those for a terminal no window
-                  has shown yet): `false` while the agent starts up or
-                  shows a dialog, such as a permission prompt. Without it,
-                  duet sends text as soon as the agent runs and can't tell
-                  when it is asking something, so define it for any agent
-                  with a TUI.
+                  has shown yet; no lines while the screen is blank):
+                  `false` while the agent starts up or shows a dialog,
+                  such as a permission prompt. Without it, duet sends text
+                  as soon as the agent runs and can't tell when it is
+                  asking something, so define it for any agent with a TUI.
 - `read_input`    (optional) `fun(self, lines): string|nil`: the agent's
                   input box as shown in its terminal (given the same lines
                   as `is_ready`), or `nil` if no input box is on screen. It
