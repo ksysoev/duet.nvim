@@ -779,6 +779,21 @@ local ready_cases = {
     ready = false,
   },
   {
+    name = "a choice in a double border below an old input box",
+    lines = { RULE, "❯ ", RULE, "  ║ ❯ 1. Yes ║", "  ║   2. No  ║" },
+    ready = false,
+  },
+  {
+    name = "a bordered choice with a no-break space before its ❯ below an old input box",
+    lines = { RULE, "❯ ", RULE, "  │\194\160❯ Yes │", "  │   No  │" },
+    ready = false,
+  },
+  {
+    name = "a choice in a dashed border below a box cut off at the bottom",
+    lines = { RULE, "❯\194\160first", "  ┆ ❯ 1. Yes ┆" },
+    ready = false,
+  },
+  {
     name = "a choice with a no-break space after its ❯ below an old input box",
     lines = { RULE, "❯ ", RULE, "  ❯\194\160 1. Yes", "    2. No" },
     ready = false,

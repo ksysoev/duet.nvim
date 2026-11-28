@@ -186,16 +186,26 @@ local function is_footer_row(line)
   return line:match("^  ") ~= nil and not line:match("^%s*⎿")
 end
 
----Whether `line` starts with a `❯`, after any spaces and a dialog's vertical borders
----(`  ❯ 1. Yes`, `  │ ❯ Yes │`): where a dialog marks its selected choice.
+-- Vertical borders a dialog's choice can sit inside (`│ ❯ Yes │`).
+local BORDERS = { "│", "┃", "║", "╎", "╏", "┆", "┇", "┊", "┋" }
+
+---Whether `line` starts with a `❯`, after any spaces (no-break spaces too) and a dialog's
+---vertical borders (`  ❯ 1. Yes`, `  │ ❯ Yes │`): where a dialog marks its selected choice.
 ---@param line string
 ---@return boolean
 local function starts_with_marker(line)
-  local rest = vim.trim(line)
-  while vim.startswith(rest, "│") or vim.startswith(rest, "┃") do
-    rest = vim.trim(rest:sub(#"│" + 1))
+  local rest = line
+  while true do
+    local skip = rest:match("^%s+")
+      or (vim.startswith(rest, NBSP) and NBSP)
+      or vim.iter(BORDERS):find(function(border)
+        return vim.startswith(rest, border)
+      end)
+    if not skip then
+      return vim.startswith(rest, "❯")
+    end
+    rest = rest:sub(#skip + 1)
   end
-  return vim.startswith(rest, "❯")
 end
 
 ---Whether an input box's prompt line holds a slash command. In a Neovim terminal, Claude
