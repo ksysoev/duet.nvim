@@ -38,9 +38,9 @@ local FILETYPE = "duet_terminal"
 -- Readiness polling (Session:when_ready): how often, and how many lines the adapter's
 -- is_ready and read_input see at least. They see the terminal's screen down to its last
 -- non-blank row, or the last READY_LINES lines ending there if those reach higher (also for a
--- terminal started hidden where no float could be opened, see call_hidden()). The live input box is on the screen, however tall typed
--- input makes it; reading no higher keeps old boxes in the scrollback, which could pass for
--- ready while a dialog is open, out of view.
+-- terminal started hidden where no float could be opened, see call_hidden()). The live input
+-- box is on the screen, however tall typed input makes it; reading no higher keeps old boxes
+-- in the scrollback, which could pass for ready while a dialog is open, out of view.
 local READY_POLL_MS = 50
 local READY_LINES = 50
 
@@ -220,6 +220,7 @@ end
 ---@field columns integer editor width
 ---@field lines integer rows available for windows
 ---@field top? integer rows taken above them (the tabline)
+---@field winbar? boolean windows have a winbar (the global 'winbar'), which takes a row of a split
 
 ---Window config for a layout. Pure: depends only on its arguments.
 ---@param layout "float"|"right"|"left"|"bottom"
@@ -257,7 +258,7 @@ end
 
 ---Size of the window a layout opens, for a terminal started without one: the float's size,
 ---a side split's width by the rows windows have, or a bottom split's height by the editor's
----width. Pure.
+---width. A split's height leaves out its winbar. Pure.
 ---@param layout "float"|"right"|"left"|"bottom"
 ---@param opts table the `terminal` config
 ---@param editor duet.EditorSize
@@ -267,10 +268,12 @@ function M.layout_size(layout, opts, editor)
   local cfg = M.win_config(layout, opts, editor)
   if layout == "float" then
     return cfg.width, cfg.height
-  elseif layout == "bottom" then
-    return editor.columns, cfg.height
   end
-  return cfg.width, editor.lines
+  local bar = editor.winbar and 1 or 0
+  if layout == "bottom" then
+    return editor.columns, math.max(1, cfg.height - bar)
+  end
+  return cfg.width, math.max(1, editor.lines - bar)
 end
 
 ---The editor area windows can use: the tabline, the command line and a status line are
@@ -280,7 +283,12 @@ local function editor_size()
   local tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
   local top = tabline and 1 or 0
   local status = vim.o.laststatus == 0 and 0 or 1
-  return { columns = vim.o.columns, lines = math.max(1, vim.o.lines - vim.o.cmdheight - status - top), top = top }
+  return {
+    columns = vim.o.columns,
+    lines = math.max(1, vim.o.lines - vim.o.cmdheight - status - top),
+    top = top,
+    winbar = vim.o.winbar ~= "",
+  }
 end
 
 ---The room windows have, as a string to compare: it changes with the editor size, the

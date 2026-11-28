@@ -1080,6 +1080,19 @@ T["hidden start"]["sizes the terminal like the layout's window"]["%s"] = functio
   eq(size[1] > 5, true)
 end
 
+T["hidden start"]["matches the window it is shown in, with a winbar"] = MiniTest.new_set({
+  parametrize = { { "right" }, { "bottom" }, { "float" } },
+})
+
+T["hidden start"]["matches the window it is shown in, with a winbar"]["%s"] = function(layout)
+  child.o.winbar = "bar"
+  fake("fake", STTY, {}, { terminal = { layout = layout } })
+  local rows = hidden_size()[1]
+  child.lua("s:show()")
+  local win = child.lua_get("vim.fn.getwininfo(s:window())[1]")
+  eq(rows, win.height)
+end
+
 T["hidden start"]["leaves no window behind and fires no window autocmds"] = function()
   fake("fake", STTY)
   child.lua([[
@@ -1921,6 +1934,15 @@ local layout_size_cases = {
     opts = ABSOLUTE,
     editor = { lines = 20 },
     expected = { 100, 14 },
+  },
+  { name = "right split, winbar", layout = "right", opts = OPTS, editor = { winbar = true }, expected = { 40, 39 } },
+  { name = "bottom split, winbar", layout = "bottom", opts = OPTS, editor = { winbar = true }, expected = { 100, 9 } },
+  {
+    name = "float ignores the winbar",
+    layout = "float",
+    opts = OPTS,
+    editor = { winbar = true },
+    expected = { 49, 19 },
   },
 }
 
