@@ -235,27 +235,18 @@ local function menu_prompt(lines, i)
   return nil
 end
 
--- The symbols that start a footer row below the live input box, after two spaces:
--- `  ⏵⏵ auto mode on`, `  ⏸ manual mode on`, `  ! for shell mode`, `  ? for shortcuts`,
--- `  ⚠ Transcript saving is off`.
-local FOOTER_SYMBOLS = { "⏵", "⏸", "!", "?", "⚠" }
-
----Whether `line` can be a row below the live input box: a blank line, a footer row (see
----FOOTER_SYMBOLS), or a row indented by four spaces or more (the slash-command menu, a
----right-aligned hint such as `ctrl+y to paste deleted text`). Other rows, such as dialog
----text, a `  ⎿ …` result or newer output, mean the box above them is an older frame.
+---Whether `line` can be a row below the live input box: a blank line, or a row indented
+---by two spaces or more (the footer such as `  ⏵⏵ auto mode on`, notices, a status line,
+---the slash-command menu, right-aligned hints). Newer content starts further left: output
+---(`⏺ …`) and spinners in the first column, dialog text after one space, rules. A tool
+---result (`  ⎿ …`) is indented like the footer but only comes below newer output.
 ---@param line string
 ---@return boolean
 local function is_footer_row(line)
-  if line:match("^%s*$") or line:match("^    ") then
+  if line:match("^%s*$") then
     return true
   end
-  for _, symbol in ipairs(FOOTER_SYMBOLS) do
-    if vim.startswith(line, "  " .. symbol) then
-      return true
-    end
-  end
-  return false
+  return line:match("^  ") ~= nil and not line:match("^%s*⎿")
 end
 
 ---If line `i` is part of the input box at the bottom of the screen (its prompt line or a

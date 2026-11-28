@@ -555,13 +555,13 @@ local ready_cases = {
     ready = false,
   },
   {
-    name = "an old box with a ❯ on a later line above dialog text indented by two spaces",
-    lines = { RULE, "❯ first", "  a ❯ b", RULE, "  Press Enter to continue" },
+    name = "an old box with a ❯ on a later line above newer output in the first column",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "⏺ Done." },
     ready = false,
   },
   {
-    name = "an old box with a ❯ on a later line above an indented spinner",
-    lines = { RULE, "❯ first", "  a ❯ b", RULE, "", "  ✻ Thinking…" },
+    name = "an old box with a ❯ on a later line above a spinner",
+    lines = { RULE, "❯ first", "  a ❯ b", RULE, "", "✻ Thinking…" },
     ready = false,
   },
   {
@@ -589,6 +589,16 @@ local ready_cases = {
       "  ❯ /clear   Start a new session",
       "    /compact   Free up context",
     },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line and a status line",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  [Opus] ~/dev/duet main", "  ⏵⏵ auto mode on" },
+    ready = true,
+  },
+  {
+    name = "a multi-line input with a ❯ on a later line and an exit hint",
+    lines = { RULE, "❯\194\160first", "  a ❯ b", RULE, "  Press Ctrl-C again to exit" },
     ready = true,
   },
   {
