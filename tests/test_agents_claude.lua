@@ -179,6 +179,24 @@ local READY = {
   "",
 }
 
+-- A line of "─" narrower than the input box, e.g. in pasted box-drawing text.
+local SHORT = string.rep("─", 8)
+
+local PASTED = {
+  string.rep(" ", 12) .. "ctrl+g to edit in Vim · Update available · run mise upgrade claude",
+  string.rep("─", 80),
+  "❯\194\160see this:",
+  "  " .. string.rep("─", 40),
+  "  " .. string.rep("─", 76),
+  "  ────",
+  "  ❯ hello",
+  "  " .. string.rep("─", 76),
+  "  ────",
+  "  end",
+  string.rep("─", 80),
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+}
+
 local ready_cases = {
   { name = "input prompt", lines = READY, ready = true },
   {
@@ -690,6 +708,64 @@ local ready_cases = {
     lines = { RULE, "❯\194\160", RULE, "  ⏸ manual mode on", string.rep(" ", 70) .. "ctrl+y to paste deleted text" },
     ready = true,
   },
+  -- An input box is found from the bottom: lines of "─" inside it are the user's text.
+  {
+    name = "a multi-line input with a line of ─ in it",
+    lines = { RULE, "❯ first", SHORT, "  a ❯ b", RULE },
+    ready = true,
+  },
+  {
+    name = "a multi-line input ending in a line of ─",
+    lines = { RULE, "❯\194\160first", SHORT, RULE, "  ⏵⏵ auto mode on" },
+    ready = true,
+  },
+  {
+    name = "pasted Claude Code output in the input",
+    lines = {
+      RULE,
+      "❯\194\160see:",
+      string.rep("─", 80),
+      "❯ hello",
+      string.rep("─", 80),
+      RULE,
+      "  ? for shortcuts",
+    },
+    ready = true,
+  },
+  {
+    name = "pasted Claude Code output in the input, in shell mode",
+    lines = { RULE, "!\194\160echo", string.rep("─", 80), "❯ hello", string.rep("─", 80), RULE },
+    ready = true,
+  },
+  {
+    name = "an old box with a line of ─ in it above a dialog without a choice marker",
+    lines = { RULE, "❯ first", SHORT, RULE, RULE, " Press Enter to continue" },
+    ready = false,
+  },
+  {
+    name = "a closing rule with no rule as wide above it",
+    lines = { "⏺ an answer", SHORT, "❯ text", RULE },
+    ready = false,
+  },
+  {
+    name = "a dialog between rules as wide as each other, below a box",
+    lines = { RULE, "❯ ", RULE, " Do you want to proceed?", " Yes / No", RULE, "" },
+    ready = false,
+  },
+  { name = "two rules with nothing between them", lines = { RULE, RULE, "  ⏵⏵ auto mode on" }, ready = false },
+  {
+    name = "a choice indented by two spaces below an old input box",
+    lines = { RULE, "❯ ", RULE, "  ❯ 1. Yes", "    2. No" },
+    ready = false,
+  },
+  {
+    name = "a slash-command choice below a box that holds no command",
+    lines = { RULE, "❯\194\160hello", RULE, "  ❯ /clear   Start a new session" },
+    ready = false,
+  },
+  -- Captured from Claude Code 2.1.330 in an 80-column Neovim terminal: a paste of rules
+  -- and a `❯` line, expanded. Later lines are indented by two spaces and wrapped.
+  { name = "pasted rules and a ❯, as Claude Code shows them", lines = PASTED, ready = true },
 }
 
 T["format_ref()"] = MiniTest.new_set({
@@ -783,6 +859,21 @@ local input_cases = {
     name = "an old box above a dialog without a choice marker",
     lines = { R80, "❯ old", R80, R80, " Press Enter to continue" },
     input = vim.NIL,
+  },
+  {
+    name = "a multi-line input with a line of ─ in it",
+    lines = { R80, "❯" .. NBSP .. "first", SHORT, "  a ❯ b", R80 },
+    input = "❯" .. NBSP .. "first\n" .. SHORT .. "\n  a ❯ b",
+  },
+  {
+    name = "pasted Claude Code output in the input",
+    lines = { RULE, "❯" .. NBSP .. "see:", R80, "❯ hello", R80, RULE, "  ? for shortcuts" },
+    input = "❯" .. NBSP .. "see:\n" .. R80 .. "\n❯ hello\n" .. R80,
+  },
+  {
+    name = "pasted rules and a ❯, as Claude Code shows them",
+    lines = PASTED,
+    input = table.concat(vim.list_slice(PASTED, 3, 10), "\n"),
   },
 }
 
