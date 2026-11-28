@@ -151,10 +151,12 @@ end
 
 ---Parse a horizontal rule: a line made only of "─" (then optional spaces), or one with a
 ---scroll label in it, `─── ↑ 38 more ───…` or `─── ↓ 38 more ───…`, which Claude Code
----draws when the input has more lines than its box shows. Returns the rule's display
----width (the number of "─" for a plain rule) and its label: nil for a plain rule, "up"
+---draws when the input has more lines than its box shows. Returns the rule's width in
+---characters (the number of "─" for a plain rule) and its label: nil for a plain rule, "up"
 ---for `↑` (lines hidden above) or "down" for `↓` (lines hidden below). The width is 0
----if `line` is not a rule, which includes a malformed label.
+---if `line` is not a rule, which includes a malformed label. Characters, not display
+---columns: with 'ambiwidth' "double", "─", "↑" and "↓" take two columns each, so the
+---display width of a labelled rule would not match that of a plain rule as wide.
 ---@param line string
 ---@return integer width
 ---@return "up"|"down"|nil label
@@ -172,7 +174,7 @@ local function parse_rule(line)
   if not label then
     return 0, nil
   end
-  return vim.api.nvim_strwidth(body), label
+  return vim.fn.strchars(body), label
 end
 
 ---Whether `line` is a horizontal rule, plain or labelled (see parse_rule).
@@ -280,7 +282,7 @@ end
 ---An input taller than the box scrolls: the top rule is then labelled `↑ N more` and the
 ---box's first row is a continuation row (see is_continuation), not the prompt line, and
 ---the closing rule may be labelled `↓ N more` (see parse_rule). A labelled rule's width is
----its whole display width. An `↑` rule is only ever a top rule and a `↓` rule only a
+---its whole length in characters. An `↑` rule is only ever a top rule and a `↓` rule only a
 ---closing rule, so a box with them the other way round is not live. A scrolled box cut off
 ---at the bottom follows the rules above, with no row (the first included) starting with a
 ---`❯`. nil if there is no live box.
@@ -353,7 +355,9 @@ end
 ---(or the last line, if the box is cut off), with trailing spaces removed: the typed text,
 ---a placeholder such as `❯ Try "…"`, or a summary such as `[Pasted text #1 +20 lines]`.
 ---When the input is taller than the box and scrolls (see live_box), these are the rows
----shown, from the first one under the top rule.
+---shown, from the first one under the top rule. A paste that only changes the counts of
+---hidden lines in the labels then reads as no change, so send waits out its grace time
+---(SUBMIT_GRACE_MS in duet.send) before it presses Enter.
 ---nil if no input box is on screen (see live_box).
 ---@param lines string[] terminal buffer lines
 ---@return string|nil
