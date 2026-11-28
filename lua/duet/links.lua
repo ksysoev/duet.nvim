@@ -848,7 +848,9 @@ end
 ---Whether `:edit` may leave the buffer `win` shows, as Neovim decides: it is not
 ---modified, it is shown in another window too, or 'bufhidden' (else 'hidden') lets it
 ---be hidden, or 'autowriteall' can write it. Otherwise `:edit` fails with E37 (or asks,
----with 'confirm').
+---with 'confirm'). For a code window only: Neovim never counts a buffer it can't write
+---(e.g. 'buftype' "nofile") as changed, and util.is_code() keeps those out. A write
+---'autowriteall' tries can still fail on disk; open() then reports it, as `:edit` would.
 ---@param win integer
 ---@return boolean
 local function can_leave(win)

@@ -854,8 +854,10 @@ else the first window in the tab that does. A window is skipped, unless it
 already shows the file, when its buffer can't change: it sets 'winfixbuf', or
 its buffer is modified and |:edit| would refuse to leave it (E37): the buffer
 is in no other window, and neither 'bufhidden' set to "hide", 'hidden' (when
-'bufhidden' is empty) nor 'autowriteall' lets it go. (|duet-context|'s
-`{file}` still refers to a skipped window.) A floating terminal is hidden
+'bufhidden' is empty) nor 'autowriteall' lets it go. With 'confirm', the
+window is skipped rather than asking to save. If 'autowriteall' can't write
+the buffer after all (the file is not writable), `gf` reports the error.
+(|duet-context|'s `{file}` still refers to a skipped window.) A floating terminal is hidden
 first, so the file isn't behind it. With no such window, the file replaces a
 start screen, as |:edit| would: a window whose filetype is in
 |duet-config-links-replace_filetypes| (the snacks, alpha, dashboard-nvim,

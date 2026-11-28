@@ -753,6 +753,8 @@ T["terminal"]["a code window whose buffer can't be left"] = MiniTest.new_set()
 T["terminal"]["a code window whose buffer can't be left"]["is skipped for a split"] = MiniTest.new_set({
   parametrize = {
     { "'nohidden'", "b.lua", nil },
+    -- `:edit` would ask to save: the window is skipped instead.
+    { "'confirm'", "b.lua", "vim.o.confirm = true" },
     { "'bufhidden' wipe over 'hidden'", "b.lua", "vim.o.hidden = true; vim.bo.bufhidden = 'wipe'" },
     { "'bufhidden' delete over 'hidden'", "b.lua", "vim.o.hidden = true; vim.bo.bufhidden = 'delete'" },
     { "'bufhidden' unload over 'hidden'", "b.lua", "vim.o.hidden = true; vim.bo.bufhidden = 'unload'" },
