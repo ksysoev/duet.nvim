@@ -1404,7 +1404,7 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"] = MiniTest.new_
     {
       "keys that start with the click, remapped",
       "n",
-      -- Their <C-LeftMouse> is Neovim's, not this mapping again: a jump to tag "foo".
+      -- Their <C-LeftMouse> is Neovim's, not this mapping again: before 0.13, a jump to tag "foo".
       [[vim.keymap.set("n", "<C-LeftMouse>", "<C-LeftMouse><Cmd>lua _G.hit = { count = 0 }<CR>", { remap = true })]],
       "<C-LeftMouse>",
       { count = 0, code = true, name = "a.lua" },
@@ -1490,6 +1490,10 @@ T["mouse"]["Ctrl+click on another window runs your own mapping"]["%s"] = functio
     terminal_mode()
   else
     child.lua("vim.api.nvim_set_current_win(s:window())")
+  end
+  if want.name and child.fn.has("nvim-0.13") == 1 then
+    -- There Neovim's own CTRL-click toggles a multicursor instead, without changing windows.
+    want = vim.tbl_extend("force", want, { code = false, name = false, mode = want.mode and "nt" })
   end
   click_code(code, keys)
   eq(child.lua_get("wait(function() return _G.hit ~= nil end)"), true)
@@ -1587,7 +1591,8 @@ end
 
 T["mouse"]["a Ctrl+click elsewhere right after a quadruple click is a new click"] = function()
   -- Neovim counts it as one, as a fifth press at the same place would be. In the window
-  -- the link opened in, duet does not map it: Neovim's CTRL-click jumps to tag "a".
+  -- the link opened in, duet does not map it, so Neovim's own CTRL-click runs. That one
+  -- must stay unmapped: duet never drops a press a mapping takes.
   child.fn.writefile({ "a\tb.lua\t1" }, root .. "/tags")
   agent("printf 'a.lua:1\\n'")
   local code = child.lua_get("vim.fn.win_getid(vim.fn.winnr('#'))")
@@ -1599,7 +1604,17 @@ T["mouse"]["a Ctrl+click elsewhere right after a quadruple click is a new click"
   click("a.lua", nil, 0, table.concat(rest, " "))
   opened()
   click_code(code, "<C-LeftMouse>")
-  eq(child.lua_get("wait(function() return vim.api.nvim_buf_get_name(0):find('b.lua', 1, true) ~= nil end)"), true)
+  if child.fn.has("nvim-0.13") == 1 then
+    -- It toggles a multicursor where you click.
+    local ran = [[wait(function()
+      local ns = vim.api.nvim_create_namespace("nvim.multicursor")
+      return #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {}) > 0
+    end)]]
+    eq(child.lua("return " .. ran), true)
+  else
+    -- It jumps to tag "a".
+    eq(child.lua_get("wait(function() return vim.api.nvim_buf_get_name(0):find('b.lua', 1, true) ~= nil end)"), true)
+  end
 end
 
 T["mouse"]["a double click mapped in terminal.keys keeps its own release"] = function()
